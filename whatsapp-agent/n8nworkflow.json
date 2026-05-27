@@ -1,0 +1,677 @@
+{
+  "name": "WhatsApp Agent - Gastos y Comidas",
+  "nodes": [
+    {
+      "id": "node-webhook",
+      "name": "Webhook Evolution API",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-agent",
+        "responseMode": "onReceived",
+        "responseData": "noData",
+        "options": {}
+      }
+    },
+    {
+      "id": "node-extract",
+      "name": "Extract and Filter Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300],
+      "parameters": {
+        "jsCode": "// Soporte para múltiples formatos de payload de Evolution API\nconst payload = $input.first().json.body || $input.first().json;\n\n// Extraer texto del mensaje (varios tipos)\nconst message =\n  payload?.data?.message?.conversation ||\n  payload?.data?.message?.extendedTextMessage?.text ||\n  payload?.data?.message?.imageMessage?.caption ||\n  payload?.data?.message?.videoMessage?.caption ||\n  '';\n\n// Extraer datos del remitente\nconst remoteJid = payload?.data?.key?.remoteJid || '';\nconst fromMe = payload?.data?.key?.fromMe === true;\nconst isGroup = remoteJid.includes('@g.us');\nconst phone = remoteJid.split('@')[0];\n\n// Filtrar mensajes inválidos: vacíos, propios, de grupos\nif (!message.trim() || fromMe || isGroup || !phone) {\n  return [];\n}\n\nreturn [{\n  json: {\n    phone,\n    usuario: phone,\n    message: message.trim()\n  }\n}];"
+      }
+    },
+    {
+      "id": "node-prepare",
+      "name": "Prepare OpenAI Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300],
+      "parameters": {
+        "jsCode": "const { phone, usuario, message } = $input.first().json;\n\n// Prompt optimizado para minimizar tokens con gpt-4o-mini\nconst systemPrompt = `Eres un parser de intenciones. Analiza el mensaje y responde SOLO JSON válido sin markdown ni texto extra.\n\nRESPUESTAS:\n\nGASTO (menciona monto/precio/$USD/gasté/compré/costó):\n{\"intent\":\"registrar_gasto\",\"data\":{\"descripcion\":\"descripcion corta\",\"categoria\":\"comida|transporte|servicios|entretenimiento|salud|hogar|otros\",\"monto\":0}}\n\nCOMIDA (alimento sin monto en $):\n{\"intent\":\"registrar_comida\",\"data\":{\"alimento\":\"nombre del alimento\",\"cantidad\":\"cantidad estimada\",\"calorias_estimadas\":0}}\n\nCOMANDO:\n{\"intent\":\"comando\",\"data\":{\"nombre\":\"resumen\"}} → usuario escribe: resumen\n{\"intent\":\"comando\",\"data\":{\"nombre\":\"gastos_hoy\"}} → usuario escribe: gastos hoy / mis gastos\n{\"intent\":\"comando\",\"data\":{\"nombre\":\"calorias_hoy\"}} → usuario escribe: calorias / calorias hoy / mi dieta\n\nINDEFINIDO:\n{\"intent\":\"fallback\",\"data\":{}}\n\nResponde SOLO el JSON.`;\n\nreturn [{\n  json: {\n    phone,\n    usuario,\n    message,\n    openaiBody: {\n      model: 'gpt-4o-mini',\n      messages: [\n        { role: 'system', content: systemPrompt },\n        { role: 'user', content: message }\n      ],\n      max_tokens: 120,\n      temperature: 0,\n      response_format: { type: 'json_object' }\n    }\n  }\n}];"
+      }
+    },
+    {
+      "id": "node-openai",
+      "name": "Call OpenAI API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [920, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OPENAI_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.openaiBody) }}",
+        "options": {
+          "timeout": 30000
+        }
+      }
+    },
+    {
+      "id": "node-parse",
+      "name": "Parse AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1160, 300],
+      "parameters": {
+        "jsCode": "const openaiResponse = $input.first().json;\nconst prepareData = $('Prepare OpenAI Request').first().json;\n\nconst { phone, usuario, message } = prepareData;\n\nlet parsed = { intent: 'fallback', data: {} };\n\ntry {\n  const content = openaiResponse.choices?.[0]?.message?.content || '{}';\n  const raw = JSON.parse(content);\n\n  const validIntents = ['registrar_gasto', 'registrar_comida', 'comando', 'fallback'];\n  if (validIntents.includes(raw.intent) && typeof raw.data === 'object') {\n    parsed = raw;\n  }\n} catch (e) {\n  // Mantener fallback si hay error de parseo\n  console.log('Error parsing OpenAI response:', e.message);\n}\n\n// Validaciones adicionales por tipo de intent\nif (parsed.intent === 'registrar_gasto') {\n  if (!parsed.data.monto || isNaN(Number(parsed.data.monto))) {\n    parsed = { intent: 'fallback', data: {} };\n  } else {\n    parsed.data.monto = Number(parsed.data.monto);\n    parsed.data.descripcion = parsed.data.descripcion || 'Sin descripción';\n    parsed.data.categoria = parsed.data.categoria || 'otros';\n  }\n}\n\nif (parsed.intent === 'registrar_comida') {\n  parsed.data.alimento = parsed.data.alimento || 'Alimento';\n  parsed.data.cantidad = parsed.data.cantidad || '1 porción';\n  parsed.data.calorias_estimadas = Number(parsed.data.calorias_estimadas) || 0;\n}\n\nreturn [{\n  json: {\n    phone,\n    usuario,\n    message,\n    intent: parsed.intent,\n    data: parsed.data\n  }\n}];"
+      }
+    },
+    {
+      "id": "node-route",
+      "name": "Route by Intent",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [1400, 300],
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "route-gasto",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "registrar_gasto",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Gasto"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "route-comida",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "registrar_comida",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Comida"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "route-comando",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "comando",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Comando"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      }
+    },
+    {
+      "id": "node-save-gasto",
+      "name": "Save Gasto Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1640, 100],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL + '/rest/v1/gastos' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ usuario: $json.usuario, descripcion: $json.data.descripcion, categoria: $json.data.categoria, monto: $json.data.monto }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      }
+    },
+    {
+      "id": "node-format-gasto",
+      "name": "Format Gasto Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1880, 100],
+      "parameters": {
+        "jsCode": "const parseData = $('Parse AI Response').first().json;\nconst { phone, data } = parseData;\n\nconst categoria = data.categoria ? ` _(${data.categoria})_` : '';\nconst responseText = `💸 *Gasto registrado*\\n${data.descripcion}${categoria}\\n$ ${data.monto} UYU`;\n\nreturn [{ json: { phone, responseText } }];"
+      }
+    },
+    {
+      "id": "node-save-comida",
+      "name": "Save Comida Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1640, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL + '/rest/v1/comidas' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ usuario: $json.usuario, alimento: $json.data.alimento, cantidad: $json.data.cantidad, calorias: $json.data.calorias_estimadas }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      }
+    },
+    {
+      "id": "node-format-comida",
+      "name": "Format Comida Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1880, 300],
+      "parameters": {
+        "jsCode": "const parseData = $('Parse AI Response').first().json;\nconst { phone, data } = parseData;\n\nconst cantidad = data.cantidad ? ` (${data.cantidad})` : '';\nconst responseText = `🍽 *Comida registrada*\\n${data.alimento}${cantidad}\\n${data.calorias_estimadas} kcal`;\n\nreturn [{ json: { phone, responseText } }];"
+      }
+    },
+    {
+      "id": "node-route-cmd",
+      "name": "Route Command",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [1640, 500],
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "cmd-resumen",
+                    "leftValue": "={{ $json.data.nombre }}",
+                    "rightValue": "resumen",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Resumen"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "cmd-gastos",
+                    "leftValue": "={{ $json.data.nombre }}",
+                    "rightValue": "gastos_hoy",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Gastos Hoy"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "cmd-calorias",
+                    "leftValue": "={{ $json.data.nombre }}",
+                    "rightValue": "calorias_hoy",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Calorias Hoy"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      }
+    },
+    {
+      "id": "node-resumen",
+      "name": "Resumen Handler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1880, 420],
+      "parameters": {
+        "jsCode": "const parseData = $('Parse AI Response').first().json;\nconst { phone, usuario } = parseData;\n\nconst today = new Date().toISOString().split('T')[0];\nconst startOfDay = `${today}T00:00:00`;\nconst endOfDay = `${today}T23:59:59`;\n\nconst supabaseUrl = $env.SUPABASE_URL;\nconst supabaseKey = $env.SUPABASE_KEY;\nconst headers = {\n  'apikey': supabaseKey,\n  'Authorization': `Bearer ${supabaseKey}`\n};\n\nlet gastos = [], comidas = [];\n\ntry {\n  const [gastosRes, comidasRes] = await Promise.all([\n    fetch(`${supabaseUrl}/rest/v1/gastos?select=monto,descripcion,categoria&usuario=eq.${usuario}&fecha=gte.${startOfDay}&fecha=lte.${endOfDay}&order=fecha.desc`, { headers }),\n    fetch(`${supabaseUrl}/rest/v1/comidas?select=calorias,alimento,cantidad&usuario=eq.${usuario}&fecha=gte.${startOfDay}&fecha=lte.${endOfDay}&order=fecha.desc`, { headers })\n  ]);\n  gastos = await gastosRes.json();\n  comidas = await comidasRes.json();\n} catch (e) {\n  console.log('Error querying Supabase:', e.message);\n}\n\nconst totalGastos = Array.isArray(gastos) ? gastos.reduce((s, g) => s + (Number(g.monto) || 0), 0) : 0;\nconst totalCalorias = Array.isArray(comidas) ? comidas.reduce((s, c) => s + (Number(c.calorias) || 0), 0) : 0;\n\nconst gastosLineas = Array.isArray(gastos) && gastos.length > 0\n  ? gastos.map(g => `  • ${g.descripcion}: $${g.monto}`).join('\\n')\n  : '  Sin gastos registrados hoy';\n\nconst comidasLineas = Array.isArray(comidas) && comidas.length > 0\n  ? comidas.map(c => `  • ${c.alimento} (${c.cantidad}): ${c.calorias} kcal`).join('\\n')\n  : '  Sin comidas registradas hoy';\n\nconst fecha = new Date().toLocaleDateString('es-UY', { weekday: 'long', day: 'numeric', month: 'long' });\n\nconst responseText = `📊 *Resumen del día*\\n_${fecha}_\\n\\n💸 *Gastos: $${totalGastos.toFixed(0)} UYU*\\n${gastosLineas}\\n\\n🍽 *Calorías: ${totalCalorias} kcal*\\n${comidasLineas}`;\n\nreturn [{ json: { phone, responseText } }];"
+      }
+    },
+    {
+      "id": "node-gastos-hoy",
+      "name": "Gastos Hoy Handler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1880, 520],
+      "parameters": {
+        "jsCode": "const parseData = $('Parse AI Response').first().json;\nconst { phone, usuario } = parseData;\n\nconst today = new Date().toISOString().split('T')[0];\nconst startOfDay = `${today}T00:00:00`;\nconst endOfDay = `${today}T23:59:59`;\n\nconst supabaseUrl = $env.SUPABASE_URL;\nconst supabaseKey = $env.SUPABASE_KEY;\nconst headers = {\n  'apikey': supabaseKey,\n  'Authorization': `Bearer ${supabaseKey}`\n};\n\nlet gastos = [];\ntry {\n  const res = await fetch(\n    `${supabaseUrl}/rest/v1/gastos?select=monto,descripcion,categoria&usuario=eq.${usuario}&fecha=gte.${startOfDay}&fecha=lte.${endOfDay}&order=fecha.desc`,\n    { headers }\n  );\n  gastos = await res.json();\n} catch (e) {\n  console.log('Error querying gastos:', e.message);\n}\n\nconst total = Array.isArray(gastos) ? gastos.reduce((s, g) => s + (Number(g.monto) || 0), 0) : 0;\n\nconst lineas = Array.isArray(gastos) && gastos.length > 0\n  ? gastos.map(g => `  • ${g.descripcion} _(${g.categoria})_: $${g.monto}`).join('\\n')\n  : '  Sin gastos registrados hoy';\n\nconst fecha = new Date().toLocaleDateString('es-UY', { day: 'numeric', month: 'long' });\n\nconst responseText = `💸 *Gastos del ${fecha}*\\n\\n${lineas}\\n\\n*Total: $${total.toFixed(0)} UYU*`;\n\nreturn [{ json: { phone, responseText } }];"
+      }
+    },
+    {
+      "id": "node-calorias",
+      "name": "Calorias Handler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1880, 620],
+      "parameters": {
+        "jsCode": "const parseData = $('Parse AI Response').first().json;\nconst { phone, usuario } = parseData;\n\nconst today = new Date().toISOString().split('T')[0];\nconst startOfDay = `${today}T00:00:00`;\nconst endOfDay = `${today}T23:59:59`;\n\nconst supabaseUrl = $env.SUPABASE_URL;\nconst supabaseKey = $env.SUPABASE_KEY;\nconst headers = {\n  'apikey': supabaseKey,\n  'Authorization': `Bearer ${supabaseKey}`\n};\n\nlet comidas = [];\ntry {\n  const res = await fetch(\n    `${supabaseUrl}/rest/v1/comidas?select=calorias,alimento,cantidad&usuario=eq.${usuario}&fecha=gte.${startOfDay}&fecha=lte.${endOfDay}&order=fecha.desc`,\n    { headers }\n  );\n  comidas = await res.json();\n} catch (e) {\n  console.log('Error querying comidas:', e.message);\n}\n\nconst totalCalorias = Array.isArray(comidas) ? comidas.reduce((s, c) => s + (Number(c.calorias) || 0), 0) : 0;\n\nconst lineas = Array.isArray(comidas) && comidas.length > 0\n  ? comidas.map(c => `  • ${c.alimento} (${c.cantidad}): ${c.calorias} kcal`).join('\\n')\n  : '  Sin comidas registradas hoy';\n\n// Referencia aproximada: 2000 kcal promedio diario\nconst meta = 2000;\nconst diferencia = meta - totalCalorias;\nconst estadoMeta = diferencia >= 0\n  ? `${diferencia} kcal restantes para la meta`\n  : `${Math.abs(diferencia)} kcal sobre la meta`;\n\nconst fecha = new Date().toLocaleDateString('es-UY', { day: 'numeric', month: 'long' });\n\nconst responseText = `🍽 *Calorías del ${fecha}*\\n\\n${lineas}\\n\\n*Total: ${totalCalorias} kcal*\\n_${estadoMeta} (meta: ${meta} kcal)_`;\n\nreturn [{ json: { phone, responseText } }];"
+      }
+    },
+    {
+      "id": "node-fallback",
+      "name": "Format Fallback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1640, 700],
+      "parameters": {
+        "jsCode": "const parseData = $('Parse AI Response').first().json;\nconst { phone } = parseData;\n\nconst responseText = `🤖 No entendí el mensaje. Podés registrar:\\n\\n💸 *Gastos:* cafe 120 / uber 350 / gasté 400 en nafta\\n🍽 *Comidas:* pizza 2 porciones / desayuno cafe y tostadas\\n📊 *Comandos:* resumen / gastos hoy / calorias hoy`;\n\nreturn [{ json: { phone, responseText } }];"
+      }
+    },
+    {
+      "id": "node-cmd-fallback",
+      "name": "Format Command Fallback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1880, 720],
+      "parameters": {
+        "jsCode": "const parseData = $('Parse AI Response').first().json;\nconst { phone } = parseData;\n\nconst responseText = `📋 *Comandos disponibles:*\\n\\n• *resumen* → resumen del día\\n• *gastos hoy* → detalle de gastos\\n• *calorias hoy* → detalle de calorías`;\n\nreturn [{ json: { phone, responseText } }];"
+      }
+    },
+    {
+      "id": "node-send",
+      "name": "Send WhatsApp Message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2200, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.EVOLUTION_API_URL + '/message/sendText/' + $env.EVOLUTION_INSTANCE }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.EVOLUTION_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ number: $json.phone, text: $json.responseText }) }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Evolution API": {
+      "main": [
+        [
+          {
+            "node": "Extract and Filter Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract and Filter Message": {
+      "main": [
+        [
+          {
+            "node": "Prepare OpenAI Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare OpenAI Request": {
+      "main": [
+        [
+          {
+            "node": "Call OpenAI API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call OpenAI API": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Response": {
+      "main": [
+        [
+          {
+            "node": "Route by Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Intent": {
+      "main": [
+        [
+          {
+            "node": "Save Gasto Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Save Comida Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Route Command",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Gasto Supabase": {
+      "main": [
+        [
+          {
+            "node": "Format Gasto Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Gasto Response": {
+      "main": [
+        [
+          {
+            "node": "Send WhatsApp Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Comida Supabase": {
+      "main": [
+        [
+          {
+            "node": "Format Comida Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Comida Response": {
+      "main": [
+        [
+          {
+            "node": "Send WhatsApp Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Command": {
+      "main": [
+        [
+          {
+            "node": "Resumen Handler",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gastos Hoy Handler",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Calorias Handler",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Command Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resumen Handler": {
+      "main": [
+        [
+          {
+            "node": "Send WhatsApp Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gastos Hoy Handler": {
+      "main": [
+        [
+          {
+            "node": "Send WhatsApp Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calorias Handler": {
+      "main": [
+        [
+          {
+            "node": "Send WhatsApp Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Fallback": {
+      "main": [
+        [
+          {
+            "node": "Send WhatsApp Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Command Fallback": {
+      "main": [
+        [
+          {
+            "node": "Send WhatsApp Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "versionId": "1.0.0",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": ""
+  },
+  "id": "whatsapp-agent-gastos-comidas",
+  "tags": [
+    {
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "updatedAt": "2024-01-01T00:00:00.000Z",
+      "id": "tag-whatsapp-agent",
+      "name": "whatsapp-agent"
+    }
+  ]
+}
