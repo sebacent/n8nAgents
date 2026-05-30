@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""Genera un resumen en Excel a partir de un CSV de gastos personales.
+"""Genera resúmenes anuales en Excel a partir de un CSV de gastos personales.
 
 El script lee un CSV con las columnas ``fecha,descripcion,categoria,monto``,
-limpia y valida los datos, agrupa los gastos por mes y categoría y produce un
-archivo Excel (``resumen_gastos.xlsx`` por defecto) con:
+limpia y valida los datos y produce **un archivo Excel por año** presente en
+los datos (o solo el solicitado con ``--año``). Cada archivo contiene:
 
-  * una hoja de detalle con los datos ya procesados,
-  * una hoja de resumen mensual (tabla dinámica mes x categoría + totales),
-  * una hoja con tres gráficos: distribución por categoría, comparativo de
-    gastos entre meses y barras apiladas de categoría por mes.
+  * una hoja ``Resumen Anual`` con el pivote mes x categoría, los totales
+    mensuales y tres gráficos (distribución por categoría, comparativo entre
+    meses y barras apiladas categoría/mes);
+  * una hoja por cada mes con movimientos, nombrada en español (Enero,
+    Febrero, …), con el detalle de transacciones, el resumen por categoría
+    del mes, el total del mes y dos gráficos (pastel y top de categorías).
 
 Uso:
-    python resumen_gastos.py --entrada gastos.csv --salida resumen_gastos.xlsx
+    python resumen_gastos.py --entrada gastos.csv [--salida-dir out] [--año 2026]
 """
 
 from __future__ import annotations
@@ -33,6 +35,22 @@ from openpyxl.drawing.image import Image as ImagenExcel  # noqa: E402
 
 # Columnas que el CSV debe contener obligatoriamente (en minúsculas).
 COLUMNAS_REQUERIDAS = ["fecha", "descripcion", "categoria", "monto"]
+
+# Nombres de mes en español, usados como nombres de hoja.
+NOMBRES_MESES = {
+    1: "Enero",
+    2: "Febrero",
+    3: "Marzo",
+    4: "Abril",
+    5: "Mayo",
+    6: "Junio",
+    7: "Julio",
+    8: "Agosto",
+    9: "Septiembre",
+    10: "Octubre",
+    11: "Noviembre",
+    12: "Diciembre",
+}
 
 
 class ErrorDatosGastos(Exception):
@@ -144,6 +162,14 @@ def limpiar_datos(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Agregaciones
 # ---------------------------------------------------------------------------
+def particionar_por_año(df: pd.DataFrame) -> dict[int, pd.DataFrame]:
+    """Agrupa el DataFrame por año calendario de la fecha."""
+    return {
+        int(año): grupo.reset_index(drop=True)
+        for año, grupo in df.groupby(df["fecha"].dt.year)
+    }
+
+
 def agrupar_por_mes_categoria(df: pd.DataFrame) -> pd.DataFrame:
     """Tabla dinámica mes x categoría (suma) con totales por fila y columna."""
     pivot = pd.pivot_table(
@@ -170,6 +196,20 @@ def resumen_mensual(df: pd.DataFrame) -> pd.DataFrame:
         df.groupby("mes")["monto"].agg(total="sum", cantidad="count").reset_index()
     )
     return resumen
+
+
+def resumen_por_categoria(df_mes: pd.DataFrame) -> pd.DataFrame:
+    """Total y porcentaje del mes para cada categoría, ordenado descendente."""
+    por_cat = df_mes.groupby("categoria")["monto"].sum().sort_values(ascending=False)
+    total_mes = float(por_cat.sum())
+    porcentaje = (por_cat / total_mes * 100) if total_mes else por_cat * 0.0
+    return pd.DataFrame(
+        {
+            "categoria": por_cat.index,
+            "total": por_cat.to_numpy(),
+            "porcentaje": porcentaje.to_numpy().round(2),
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +281,38 @@ def grafico_apilado_categoria_mes(df: pd.DataFrame) -> BytesIO:
     return _figura_a_imagen(fig)
 
 
+def grafico_pastel_mes(df_mes: pd.DataFrame, nombre_mes: str) -> BytesIO:
+    """Pastel de categorías para un único mes."""
+    por_cat = df_mes.groupby("categoria")["monto"].sum().sort_values(ascending=False)
+
+    fig, ax = plt.subplots(figsize=(6, 4.5))
+    ax.pie(
+        por_cat.to_numpy(),
+        labels=list(por_cat.index),
+        autopct="%1.1f%%",
+        startangle=90,
+    )
+    ax.axis("equal")
+    ax.set_title(f"Distribución por categoría · {nombre_mes}")
+    return _figura_a_imagen(fig)
+
+
+def grafico_top_categorias_mes(df_mes: pd.DataFrame, nombre_mes: str) -> BytesIO:
+    """Barras horizontales con las categorías ordenadas por monto."""
+    # Orden ascendente: matplotlib pinta el primer elemento abajo, por lo que
+    # la categoría con mayor gasto queda en la parte superior del gráfico.
+    por_cat = df_mes.groupby("categoria")["monto"].sum().sort_values(ascending=True)
+
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    ax.barh(list(por_cat.index), por_cat.to_numpy(), color="#4C72B0")
+    ax.set_title(f"Top categorías · {nombre_mes}")
+    ax.set_xlabel("Monto total")
+    for i, valor in enumerate(por_cat.to_numpy()):
+        ax.text(valor, i, f" {valor:,.0f}", va="center", fontsize=8)
+    fig.tight_layout()
+    return _figura_a_imagen(fig)
+
+
 # ---------------------------------------------------------------------------
 # Escritura del Excel
 # ---------------------------------------------------------------------------
@@ -254,41 +326,63 @@ def _autoajustar_columnas(hoja, dataframe: pd.DataFrame, offset: int = 0) -> Non
         )
 
 
-def escribir_excel(
-    detalle: pd.DataFrame,
-    pivot: pd.DataFrame,
-    resumen_mes: pd.DataFrame,
-    graficos: list[tuple[str, BytesIO]],
-    ruta_salida: str,
-) -> None:
-    """Escribe las hojas de datos y embebe los gráficos en el Excel."""
-    # Copia para mostrar la fecha sin componente horario.
-    detalle_export = detalle.copy()
-    detalle_export["fecha"] = detalle_export["fecha"].dt.date
+def escribir_hoja_mes(writer, df_mes: pd.DataFrame, nombre_hoja: str) -> None:
+    """Detalle + resumen por categoría + total + dos gráficos de un mes."""
+    # 1) Detalle de transacciones (sin la columna interna 'mes').
+    detalle = df_mes[["fecha", "descripcion", "categoria", "monto"]].copy()
+    detalle["fecha"] = detalle["fecha"].dt.date
+    detalle.to_excel(writer, sheet_name=nombre_hoja, index=False, startrow=0)
+    hoja = writer.sheets[nombre_hoja]
+    _autoajustar_columnas(hoja, detalle)
+
+    # 2) Resumen por categoría con una fila en blanco de separación.
+    resumen_cat = resumen_por_categoria(df_mes)
+    inicio_resumen = len(detalle) + 3
+    resumen_cat.to_excel(
+        writer, sheet_name=nombre_hoja, index=False, startrow=inicio_resumen
+    )
+
+    # 3) Total del mes, justo debajo del resumen por categoría.
+    fila_total_excel = inicio_resumen + len(resumen_cat) + 2  # 1-indexed
+    hoja.cell(row=fila_total_excel, column=1, value="Total del mes")
+    hoja.cell(row=fila_total_excel, column=2, value=float(df_mes["monto"].sum()))
+
+    # 4) Gráficos del mes a la derecha de las tablas.
+    hoja.add_image(ImagenExcel(grafico_pastel_mes(df_mes, nombre_hoja)), "F1")
+    hoja.add_image(ImagenExcel(grafico_top_categorias_mes(df_mes, nombre_hoja)), "F26")
+
+
+def escribir_excel_anual(df_año: pd.DataFrame, año: int, ruta_salida: str) -> None:
+    """Genera el Excel de un año: hoja Resumen Anual + una hoja por mes."""
+    pivot = agrupar_por_mes_categoria(df_año)
+    resumen_mes = resumen_mensual(df_año)
 
     with pd.ExcelWriter(ruta_salida, engine="openpyxl") as writer:
-        # Hoja 1: detalle procesado.
-        detalle_export.to_excel(writer, sheet_name="Detalle", index=False)
-        _autoajustar_columnas(writer.sheets["Detalle"], detalle_export)
-
-        # Hoja 2: resumen mensual (pivote + tabla de totales por mes).
-        pivot.to_excel(writer, sheet_name="Resumen Mensual")
+        # Hoja 1: Resumen Anual (pivote + tabla mensual + 3 gráficos).
+        pivot.to_excel(writer, sheet_name="Resumen Anual")
+        hoja_resumen = writer.sheets["Resumen Anual"]
         inicio_resumen = len(pivot) + 3
         resumen_mes.to_excel(
             writer,
-            sheet_name="Resumen Mensual",
+            sheet_name="Resumen Anual",
             startrow=inicio_resumen,
             index=False,
         )
+        hoja_resumen.add_image(
+            ImagenExcel(grafico_distribucion_categorias(df_año)), "J1"
+        )
+        hoja_resumen.add_image(
+            ImagenExcel(grafico_comparativo_meses(df_año)), "J28"
+        )
+        hoja_resumen.add_image(
+            ImagenExcel(grafico_apilado_categoria_mes(df_año)), "J55"
+        )
 
-        # Hoja 3: gráficos embebidos uno debajo de otro.
-        libro = writer.book
-        hoja_graficos = libro.create_sheet("Gráficos")
-        fila = 1
-        for titulo, imagen in graficos:
-            hoja_graficos.cell(row=fila, column=1, value=titulo)
-            hoja_graficos.add_image(ImagenExcel(imagen), f"A{fila + 1}")
-            fila += 26  # espacio suficiente para no solapar las imágenes
+        # Hojas mensuales en orden cronológico, solo meses con movimientos.
+        meses_con_datos = sorted(int(m) for m in df_año["fecha"].dt.month.unique())
+        for num_mes in meses_con_datos:
+            df_mes = df_año[df_año["fecha"].dt.month == num_mes].reset_index(drop=True)
+            escribir_hoja_mes(writer, df_mes, NOMBRES_MESES[num_mes])
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +391,9 @@ def escribir_excel(
 def parsear_argumentos() -> argparse.Namespace:
     """Define y parsea los argumentos de línea de comandos."""
     parser = argparse.ArgumentParser(
-        description="Genera un resumen en Excel de gastos personales a partir de un CSV."
+        description=(
+            "Genera un Excel por cada año presente en el CSV de gastos personales."
+        )
     )
     parser.add_argument(
         "--entrada",
@@ -305,9 +401,17 @@ def parsear_argumentos() -> argparse.Namespace:
         help="Ruta del CSV de entrada (por defecto: gastos.csv).",
     )
     parser.add_argument(
-        "--salida",
-        default="resumen_gastos.xlsx",
-        help="Ruta del Excel de salida (por defecto: resumen_gastos.xlsx).",
+        "--salida-dir",
+        dest="salida_dir",
+        default=".",
+        help="Directorio donde se guardarán los Excel generados (por defecto: el actual).",
+    )
+    parser.add_argument(
+        "--año",
+        dest="año",
+        type=int,
+        default=None,
+        help="Procesar solo el año indicado (YYYY). Si no se pasa, se genera uno por año.",
     )
     return parser.parse_args()
 
@@ -315,26 +419,36 @@ def parsear_argumentos() -> argparse.Namespace:
 def main() -> None:
     """Orquesta el flujo completo: cargar, validar, procesar y exportar."""
     args = parsear_argumentos()
+    archivos_generados: list[tuple[str, int]] = []
     try:
         df_crudo = cargar_csv(args.entrada)
         validar_columnas(df_crudo)
         df = limpiar_datos(df_crudo)
 
-        pivot = agrupar_por_mes_categoria(df)
-        resumen_mes = resumen_mensual(df)
+        por_año = particionar_por_año(df)
 
-        graficos = [
-            ("Distribución por categoría", grafico_distribucion_categorias(df)),
-            ("Comparativo por mes", grafico_comparativo_meses(df)),
-            ("Categorías por mes (apilado)", grafico_apilado_categoria_mes(df)),
-        ]
+        # Filtrar al año pedido si corresponde, validando existencia.
+        if args.año is not None:
+            if args.año not in por_año:
+                disponibles = ", ".join(str(a) for a in sorted(por_año))
+                raise ErrorDatosGastos(
+                    f"No hay datos para el año {args.año}. "
+                    f"Años disponibles en el CSV: {disponibles}."
+                )
+            por_año = {args.año: por_año[args.año]}
 
-        escribir_excel(df, pivot, resumen_mes, graficos, args.salida)
+        os.makedirs(args.salida_dir, exist_ok=True)
+        for año in sorted(por_año):
+            ruta = os.path.join(args.salida_dir, f"resumen_gastos_{año}.xlsx")
+            escribir_excel_anual(por_año[año], año, ruta)
+            archivos_generados.append((ruta, len(por_año[año])))
     except ErrorDatosGastos as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Listo: se generó '{args.salida}' con {len(df)} registros válidos.")
+    print("Listo. Archivos generados:")
+    for ruta, n in archivos_generados:
+        print(f"  - {ruta} ({n} registros)")
 
 
 if __name__ == "__main__":
