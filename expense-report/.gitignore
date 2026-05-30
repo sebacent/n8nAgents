@@ -2,3 +2,4 @@
 __pycache__/
 *.pyc
 resumen_gastos.xlsx
+resumen_gastos_*.xlsx
