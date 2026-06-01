@@ -1,0 +1,83 @@
+# Reglas de clasificación para el importador de estados de cuenta.
+#
+# Cada clave es el nombre de la categoría. El valor puede ser:
+#   1) Una lista de patrones (substrings, case-insensitive) que matchean
+#      contra la descripción del movimiento.
+#   2) Un dict con 'patrones' y opcionalmente 'tipo' (gasto | ingreso) para
+#      forzar el tipo cuando matchea.
+#
+# El primer match gana (las categorías se evalúan en el orden de aparición).
+# Lo que no matchea ningún patrón queda como 'Sin clasificar'.
+
+Comida:
+  - PedidosYa
+  - Tienda Inglesa
+  - Disco N
+  - Devoto
+  - Autoservice
+  - MC Donald
+  - KFC
+  - Hurban Food
+  - Quarta Market
+  - Ghanima
+  - Sol y Luna
+  - Goddard
+  - La Cuadra
+  - Restaurante
+  - Supermercado
+  - Natal 33
+
+Transporte:
+  - Nafta
+  - Uber
+  - Cabify
+  - Subte
+  - DISA
+  - Tres Marias
+
+Salud:
+  - Farmacia
+  - Gimnasio
+
+Ocio:
+  - Cine
+  - Concierto
+  - Plaza Cuba
+  - Bookshop
+
+Educacion:
+  - Libros
+  - Curso
+  - LATU
+
+Servicios:
+  - Pago Servicios
+  - Antel
+  - UTE
+  - OSE
+
+Tarjeta de Crédito:
+  - Pago de TC
+
+# IMPORTANTE: las reglas que fuerzan tipo=ingreso van ANTES de las de
+# transferencias genéricas, así "TRF SPI SUELDOS" matchea Sueldo y no
+# Transferencias.
+Sueldo:
+  tipo: ingreso
+  patrones:
+    - SUELDOS
+
+Ingresos varios:
+  tipo: ingreso
+  patrones:
+    - TRANSFERENCIA RECIBIDA
+    - COBRO DE
+    - DEVOL MASTER
+
+Transferencias:
+  - TRANSFERENCIA SPI ENVIADA
+  - TRF E-BROU
+  - TRF SPI
+
+Retiros:
+  - Retiro Red

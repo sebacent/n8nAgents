@@ -1,21 +1,23 @@
-fecha,descripcion,categoria,monto
-2026-01-10,Supermercado,Comida,1200
-2026-01-15,Nafta,Transporte,4500
-2026-01-20,Cine,Ocio,2300
-2026-01-28,Farmacia,Salud,1800
-2026-02-03,Supermercado,Comida,1550
-2026-02-09,Subte,Transporte,900
-2026-02-14,Restaurante,Comida,3200
-2026-02-22,Gimnasio,Salud,5000
-2026-03-01,Supermercado,Comida,1700
-2026-03-05,Uber,Transporte,1300
-2026-03-12,Concierto,Ocio,7800
-2026-03-19,Libros,Educacion,2600
-2026-03-25,Farmacia,Salud,1100
-2027-01-05,Supermercado,Comida,2100
-2027-01-18,Nafta,Transporte,5200
-2027-02-10,Curso online,Educacion,8900
-2027-02-14,Restaurante,Comida,4100
-2027-03-03,Supermercado,Comida,2400
-2027-03-15,Cine,Ocio,3000
-2027-03-22,Farmacia,Salud,1500
+fecha,descripcion,categoria,monto,tipo,fuente,id_doc
+2026-01-01,TRF SPI SUELDOS,Sueldo,80000,ingreso,brou,SUE-2601
+2026-01-10,Supermercado,Comida,1200,gasto,manual,
+2026-01-15,Nafta,Transporte,4500,gasto,manual,
+2026-01-20,Cine,Ocio,2300,gasto,manual,
+2026-01-28,Farmacia,Salud,1800,gasto,manual,
+2026-02-01,TRF SPI SUELDOS,Sueldo,82000,ingreso,brou,SUE-2602
+2026-02-03,Supermercado,Comida,1550,gasto,manual,
+2026-02-09,Subte,Transporte,900,gasto,manual,
+2026-02-14,Restaurante,Comida,3200,gasto,manual,
+2026-02-22,Gimnasio,Salud,5000,gasto,manual,
+2026-03-01,Supermercado,Comida,1700,gasto,manual,
+2026-03-05,Uber,Transporte,1300,gasto,manual,
+2026-03-12,Concierto,Ocio,7800,gasto,manual,
+2026-03-19,Libros,Educacion,2600,gasto,manual,
+2026-03-25,Farmacia,Salud,1100,gasto,manual,
+2027-01-05,Supermercado,Comida,2100,gasto,manual,
+2027-01-18,Nafta,Transporte,5200,gasto,manual,
+2027-02-10,Curso online,Educacion,8900,gasto,manual,
+2027-02-14,Restaurante,Comida,4100,gasto,manual,
+2027-03-03,Supermercado,Comida,2400,gasto,manual,
+2027-03-15,Cine,Ocio,3000,gasto,manual,
+2027-03-22,Farmacia,Salud,1500,gasto,manual,

@@ -36,6 +36,13 @@ from openpyxl.drawing.image import Image as ImagenExcel  # noqa: E402
 # Columnas que el CSV debe contener obligatoriamente (en minúsculas).
 COLUMNAS_REQUERIDAS = ["fecha", "descripcion", "categoria", "monto"]
 
+# Columnas opcionales con sus valores por defecto, para compatibilidad hacia
+# atrás con CSVs viejos que no las traen.
+COLUMNAS_OPCIONALES = {"tipo": "gasto", "fuente": "manual", "id_doc": ""}
+
+# Tipos válidos para la columna 'tipo'.
+TIPOS_VALIDOS = {"gasto", "ingreso"}
+
 # Nombres de mes en español, usados como nombres de hoja.
 NOMBRES_MESES = {
     1: "Enero",
@@ -155,7 +162,25 @@ def limpiar_datos(df: pd.DataFrame) -> pd.DataFrame:
     # Etiqueta de periodo "YYYY-MM" usada para agrupar.
     df_valido["mes"] = df_valido["fecha"].dt.strftime("%Y-%m")
 
-    columnas = ["fecha", "descripcion", "categoria", "monto", "mes"]
+    # Completar columnas opcionales (tipo/fuente/id_doc) con sus defaults para
+    # mantener compatibilidad con CSVs viejos.
+    for col, default in COLUMNAS_OPCIONALES.items():
+        if col not in df_valido.columns:
+            df_valido[col] = default
+        else:
+            df_valido[col] = df_valido[col].fillna(default)
+
+    # Normalizar y validar 'tipo'.
+    df_valido["tipo"] = df_valido["tipo"].astype(str).str.strip().str.lower()
+    invalidos = ~df_valido["tipo"].isin(TIPOS_VALIDOS)
+    if invalidos.any():
+        valores = sorted(df_valido.loc[invalidos, "tipo"].unique())
+        raise ErrorDatosGastos(
+            f"Valores inválidos en columna 'tipo': {', '.join(valores)}. "
+            f"Se esperaba uno de: {', '.join(sorted(TIPOS_VALIDOS))}."
+        )
+
+    columnas = ["fecha", "descripcion", "categoria", "monto", "mes", "tipo", "fuente", "id_doc"]
     return df_valido.sort_values("fecha")[columnas].reset_index(drop=True)
 
 
@@ -352,10 +377,41 @@ def escribir_hoja_mes(writer, df_mes: pd.DataFrame, nombre_hoja: str) -> None:
     hoja.add_image(ImagenExcel(grafico_top_categorias_mes(df_mes, nombre_hoja)), "F26")
 
 
+def escribir_hoja_ingresos(writer, df_ingresos: pd.DataFrame) -> None:
+    """Hoja con el detalle de ingresos del año + total por mes (sin gráficos)."""
+    detalle = df_ingresos[["fecha", "descripcion", "categoria", "monto", "fuente"]].copy()
+    detalle["fecha"] = detalle["fecha"].dt.date
+    detalle.to_excel(writer, sheet_name="Ingresos", index=False)
+    hoja = writer.sheets["Ingresos"]
+    _autoajustar_columnas(hoja, detalle)
+
+    # Total por mes debajo.
+    por_mes = (
+        df_ingresos.groupby("mes")["monto"]
+        .agg(total="sum", cantidad="count")
+        .reset_index()
+    )
+    inicio = len(detalle) + 3
+    por_mes.to_excel(writer, sheet_name="Ingresos", index=False, startrow=inicio)
+
+
 def escribir_excel_anual(df_año: pd.DataFrame, año: int, ruta_salida: str) -> None:
-    """Genera el Excel de un año: hoja Resumen Anual + una hoja por mes."""
-    pivot = agrupar_por_mes_categoria(df_año)
-    resumen_mes = resumen_mensual(df_año)
+    """Genera el Excel de un año: hoja Resumen Anual + una hoja por mes.
+
+    Los gráficos y las agregaciones usan solo movimientos con ``tipo=gasto``.
+    Si hay ingresos en el año, se agrega una hoja ``Ingresos`` con su detalle.
+    """
+    df_gastos = df_año[df_año["tipo"] == "gasto"].reset_index(drop=True)
+    df_ingresos = df_año[df_año["tipo"] == "ingreso"].reset_index(drop=True)
+
+    if df_gastos.empty:
+        raise ErrorDatosGastos(
+            f"El año {año} no tiene movimientos con tipo='gasto'; no se puede "
+            "generar el resumen anual."
+        )
+
+    pivot = agrupar_por_mes_categoria(df_gastos)
+    resumen_mes = resumen_mensual(df_gastos)
 
     with pd.ExcelWriter(ruta_salida, engine="openpyxl") as writer:
         # Hoja 1: Resumen Anual (pivote + tabla mensual + 3 gráficos).
@@ -369,20 +425,24 @@ def escribir_excel_anual(df_año: pd.DataFrame, año: int, ruta_salida: str) -> 
             index=False,
         )
         hoja_resumen.add_image(
-            ImagenExcel(grafico_distribucion_categorias(df_año)), "J1"
+            ImagenExcel(grafico_distribucion_categorias(df_gastos)), "J1"
         )
         hoja_resumen.add_image(
-            ImagenExcel(grafico_comparativo_meses(df_año)), "J28"
+            ImagenExcel(grafico_comparativo_meses(df_gastos)), "J28"
         )
         hoja_resumen.add_image(
-            ImagenExcel(grafico_apilado_categoria_mes(df_año)), "J55"
+            ImagenExcel(grafico_apilado_categoria_mes(df_gastos)), "J55"
         )
 
-        # Hojas mensuales en orden cronológico, solo meses con movimientos.
-        meses_con_datos = sorted(int(m) for m in df_año["fecha"].dt.month.unique())
+        # Hojas mensuales en orden cronológico, solo meses con gastos.
+        meses_con_datos = sorted(int(m) for m in df_gastos["fecha"].dt.month.unique())
         for num_mes in meses_con_datos:
-            df_mes = df_año[df_año["fecha"].dt.month == num_mes].reset_index(drop=True)
+            df_mes = df_gastos[df_gastos["fecha"].dt.month == num_mes].reset_index(drop=True)
             escribir_hoja_mes(writer, df_mes, NOMBRES_MESES[num_mes])
+
+        # Hoja opcional de ingresos al final, solo si hay datos.
+        if not df_ingresos.empty:
+            escribir_hoja_ingresos(writer, df_ingresos)
 
 
 # ---------------------------------------------------------------------------
