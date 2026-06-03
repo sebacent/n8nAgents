@@ -1,13 +1,14 @@
 # Reglas de clasificación para el importador de estados de cuenta.
 #
-# Cada clave es el nombre de la categoría. El valor puede ser:
-#   1) Una lista de patrones (substrings, case-insensitive) que matchean
-#      contra la descripción del movimiento.
-#   2) Un dict con 'patrones' y opcionalmente 'tipo' (gasto | ingreso) para
-#      forzar el tipo cuando matchea.
-#
-# El primer match gana (las categorías se evalúan en el orden de aparición).
+# Cada clave es el nombre de la categoría y su valor es una lista de patrones
+# (substrings, case-insensitive) que matchean contra la descripción del
+# movimiento. El primer match gana (las categorías se evalúan en orden).
 # Lo que no matchea ningún patrón queda como 'Sin clasificar'.
+#
+# El 'tipo' (gasto/ingreso) NO se define acá: lo determina la fuente del dato
+# (las columnas Débito/Crédito del banco, o la columna 'tipo' del CSV manual).
+# Así una categoría como "Sueldo" no fuerza nada: ese movimiento ya viene como
+# ingreso porque el banco lo registró en la columna Crédito.
 
 Comida:
   - PedidosYa
@@ -26,6 +27,7 @@ Comida:
   - Restaurante
   - Supermercado
   - Natal 33
+  - Kinko
 
 Transporte:
   - Nafta
@@ -59,24 +61,23 @@ Servicios:
 Tarjeta de Crédito:
   - Pago de TC
 
-# IMPORTANTE: las reglas que fuerzan tipo=ingreso van ANTES de las de
-# transferencias genéricas, así "TRF SPI SUELDOS" matchea Sueldo y no
-# Transferencias.
+Comisiones bancarias:
+  - COM PENDIENTE DE COBRO
+  - Comision
+
+# IMPORTANTE: las categorías más específicas van ANTES de las genéricas, así
+# "TRF SPI SUELDOS" matchea Sueldo y no la regla genérica de Transferencias.
 Sueldo:
-  tipo: ingreso
-  patrones:
-    - SUELDOS
+  - SUELDOS
 
 Ingresos varios:
-  tipo: ingreso
-  patrones:
-    - TRANSFERENCIA RECIBIDA
-    - COBRO DE
-    - DEVOL MASTER
+  - TRANSFERENCIA RECIBIDA
+  - DEVOL MASTER
+  - TRASPASO DE DINERO
 
 Transferencias:
   - TRANSFERENCIA SPI ENVIADA
-  - TRF E-BROU
+  - E-BROU
   - TRF SPI
 
 Retiros:

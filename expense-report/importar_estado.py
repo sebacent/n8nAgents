@@ -49,22 +49,27 @@ class ErrorImportacion(Exception):
 # ---------------------------------------------------------------------------
 # Utilidades
 # ---------------------------------------------------------------------------
-def _parsear_monto_europeo(valor) -> float | None:
-    """Convierte ``'43.007,09'`` (formato europeo) a ``43007.09``.
+def _parsear_monto(valor) -> float | None:
+    """Convierte un monto a float, tolerando formato europeo y nativo.
 
-    Acepta también números nativos y devuelve ``None`` para vacíos/inválidos.
+    - Números nativos (int/float) se devuelven tal cual. El export real de
+      BROU (.xls de WPS) trae los montos ya tipados como número.
+    - Strings: si aparece una coma se asume formato europeo (``'1.234,56'``,
+      punto = miles, coma = decimal); si solo hay punto se asume que es el
+      separador decimal (``'1234.56'``). Así no se corrompe ninguno de los dos.
+    - Vacíos / no parseables devuelven ``None``.
     """
     if pd.isna(valor):
         return None
     if isinstance(valor, (int, float)):
         return float(valor)
-    texto = str(valor).strip()
+    texto = str(valor).strip().replace(" ", "")
     if not texto:
         return None
-    # Punto = separador de miles, coma = decimal.
-    normalizado = texto.replace(".", "").replace(",", ".")
+    if "," in texto:
+        texto = texto.replace(".", "").replace(",", ".")
     try:
-        return float(normalizado)
+        return float(texto)
     except ValueError:
         return None
 
@@ -149,10 +154,10 @@ def adaptador_brou(ruta: str) -> pd.DataFrame:
         df = df.iloc[: fecha_serie.isna().idxmax()].copy()
 
     debito = pd.Series(
-        [_parsear_monto_europeo(v) for v in df["debito"]], index=df.index
+        [_parsear_monto(v) for v in df["debito"]], index=df.index
     ).fillna(0.0)
     credito = pd.Series(
-        [_parsear_monto_europeo(v) for v in df["credito"]], index=df.index
+        [_parsear_monto(v) for v in df["credito"]], index=df.index
     ).fillna(0.0)
 
     descripcion = (
@@ -206,12 +211,11 @@ ADAPTADORES: dict[str, Callable[[str], pd.DataFrame]] = {
 # Reglas de clasificación
 # ---------------------------------------------------------------------------
 class Regla:
-    """Patrón que asigna una categoría (y opcionalmente fuerza un tipo)."""
+    """Patrón (substring, case-insensitive) que asigna una categoría."""
 
-    def __init__(self, categoria: str, patrones: list[str], tipo: str | None = None):
+    def __init__(self, categoria: str, patrones: list[str]):
         self.categoria = categoria
         self.patrones = [str(p).lower() for p in patrones]
-        self.tipo = tipo
 
     def matchea(self, descripcion: str) -> bool:
         desc = descripcion.lower()
@@ -219,7 +223,12 @@ class Regla:
 
 
 def cargar_reglas(ruta: str) -> list[Regla]:
-    """Lee un YAML de reglas. Formato documentado en categorias.yml."""
+    """Lee un YAML de reglas. Formato documentado en categorias.yml.
+
+    Cada clave es una categoría; el valor es una lista de patrones, o un dict
+    con clave ``patrones``. El ``tipo`` (gasto/ingreso) NO se define acá: lo
+    determina la fuente del dato (columnas del banco o el CSV manual).
+    """
     if not os.path.isfile(ruta):
         raise ErrorImportacion(f"No se encontró el archivo de reglas: '{ruta}'.")
     with open(ruta, encoding="utf-8") as f:
@@ -230,13 +239,7 @@ def cargar_reglas(ruta: str) -> list[Regla]:
         if isinstance(valor, list):
             reglas.append(Regla(categoria, valor))
         elif isinstance(valor, dict):
-            patrones = valor.get("patrones", [])
-            tipo = valor.get("tipo")
-            if tipo is not None and tipo not in {"gasto", "ingreso"}:
-                raise ErrorImportacion(
-                    f"Tipo inválido '{tipo}' para la categoría '{categoria}'."
-                )
-            reglas.append(Regla(categoria, patrones, tipo))
+            reglas.append(Regla(categoria, valor.get("patrones", [])))
         else:
             raise ErrorImportacion(
                 f"Formato inválido para la categoría '{categoria}' en '{ruta}'."
@@ -259,8 +262,10 @@ def clasificar(df: pd.DataFrame, reglas: list[Regla]) -> pd.DataFrame:
         for regla in reglas:
             if regla.matchea(desc):
                 df.at[idx, "categoria"] = regla.categoria
-                if regla.tipo:
-                    df.at[idx, "tipo"] = regla.tipo
+                # NOTA: el 'tipo' (gasto/ingreso) lo determina la fuente
+                # (columnas Débito/Crédito del banco, o el CSV manual); las
+                # reglas solo categorizan y nunca lo sobrescriben, para no
+                # contradecir la dirección real del movimiento.
                 break
         else:
             df.at[idx, "categoria"] = "Sin clasificar"
@@ -270,6 +275,29 @@ def clasificar(df: pd.DataFrame, reglas: list[Regla]) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Deduplicación al anexar
 # ---------------------------------------------------------------------------
+def _clave_dedup(df: pd.DataFrame) -> pd.Series:
+    """Clave normalizada (fecha|monto|id_doc|fuente) para deduplicar.
+
+    Normaliza cada campo de forma idéntica esté el dato en memoria o releído
+    de un CSV (donde, p. ej., un id_doc vacío vuelve como NaN float). Cada
+    campo se reduce a string con ``""`` para nulos; así una fila sin nº de
+    documento produce la misma clave en ambos lados y no se duplica.
+    """
+    fecha = pd.to_datetime(df["fecha"], errors="coerce").dt.strftime("%Y-%m-%d")
+    monto = pd.to_numeric(df["monto"], errors="coerce").round(2)
+    partes = pd.DataFrame(
+        {"fecha": fecha, "monto": monto, "id_doc": df["id_doc"], "fuente": df["fuente"]}
+    )
+
+    def _fila(r) -> str:
+        return "|".join(
+            "" if pd.isna(c) else str(c).strip()
+            for c in (r["fecha"], r["monto"], r["id_doc"], r["fuente"])
+        )
+
+    return partes.apply(_fila, axis=1)
+
+
 def deduplicar(
     df_nuevo: pd.DataFrame, df_existente: pd.DataFrame
 ) -> tuple[pd.DataFrame, int]:
@@ -277,11 +305,8 @@ def deduplicar(
     if df_existente.empty:
         return df_nuevo.reset_index(drop=True), 0
 
-    clave = ["fecha", "monto", "id_doc", "fuente"]
-    existente_keys = set(
-        map(tuple, df_existente[clave].astype(str).values)
-    )
-    es_dup = df_nuevo[clave].astype(str).apply(tuple, axis=1).isin(existente_keys)
+    existentes = set(_clave_dedup(df_existente))
+    es_dup = _clave_dedup(df_nuevo).isin(existentes)
     n_omitidos = int(es_dup.sum())
     return df_nuevo[~es_dup].reset_index(drop=True), n_omitidos
 
