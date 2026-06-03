@@ -227,7 +227,8 @@ def cargar_reglas(ruta: str) -> list[Regla]:
 
     Cada clave es una categoría; el valor es una lista de patrones, o un dict
     con clave ``patrones``. El ``tipo`` (gasto/ingreso) NO se define acá: lo
-    determina la fuente del dato (columnas del banco o el CSV manual).
+    determina siempre la fuente del dato (columnas Débito/Crédito del banco, o
+    la columna 'tipo' del CSV manual), por encima de cualquier regla.
     """
     if not os.path.isfile(ruta):
         raise ErrorImportacion(f"No se encontró el archivo de reglas: '{ruta}'.")
@@ -263,9 +264,8 @@ def clasificar(df: pd.DataFrame, reglas: list[Regla]) -> pd.DataFrame:
             if regla.matchea(desc):
                 df.at[idx, "categoria"] = regla.categoria
                 # NOTA: el 'tipo' (gasto/ingreso) lo determina la fuente
-                # (columnas Débito/Crédito del banco, o el CSV manual); las
-                # reglas solo categorizan y nunca lo sobrescriben, para no
-                # contradecir la dirección real del movimiento.
+                # (columnas Débito/Crédito del banco, o el CSV manual) por
+                # encima de toda regla; acá solo se asigna la categoría.
                 break
         else:
             df.at[idx, "categoria"] = "Sin clasificar"

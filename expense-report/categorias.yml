@@ -5,10 +5,9 @@
 # movimiento. El primer match gana (las categorías se evalúan en orden).
 # Lo que no matchea ningún patrón queda como 'Sin clasificar'.
 #
-# El 'tipo' (gasto/ingreso) NO se define acá: lo determina la fuente del dato
-# (las columnas Débito/Crédito del banco, o la columna 'tipo' del CSV manual).
-# Así una categoría como "Sueldo" no fuerza nada: ese movimiento ya viene como
-# ingreso porque el banco lo registró en la columna Crédito.
+# El 'tipo' (gasto/ingreso) NO se define acá: lo determina SIEMPRE la fuente
+# del dato (las columnas Débito/Crédito del banco, o la columna 'tipo' del CSV
+# manual), por encima de cualquier regla. Estas reglas solo asignan categoría.
 
 Comida:
   - PedidosYa
@@ -67,6 +66,11 @@ Comisiones bancarias:
 
 # IMPORTANTE: las categorías más específicas van ANTES de las genéricas, así
 # "TRF SPI SUELDOS" matchea Sueldo y no la regla genérica de Transferencias.
+
+# El banco lo cobra como débito (gasto): es la devolución del adelanto pedido.
+Adelanto de sueldo:
+  - COBRO DE ADS
+
 Sueldo:
   - SUELDOS
 
