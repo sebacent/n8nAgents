@@ -59,6 +59,13 @@ NOMBRES_MESES = {
     12: "Diciembre",
 }
 
+# Abreviaturas de mes para ejes de gráficos.
+MESES_CORTOS = {
+    1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr",
+    5: "May", 6: "Jun", 7: "Jul", 8: "Ago",
+    9: "Sep", 10: "Oct", 11: "Nov", 12: "Dic",
+}
+
 
 class ErrorDatosGastos(Exception):
     """Error de negocio con un mensaje claro para el usuario final."""
@@ -240,6 +247,11 @@ def resumen_por_categoria(df_mes: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Gráficos (matplotlib -> PNG en memoria)
 # ---------------------------------------------------------------------------
+def _etiqueta_mes(mes_str: str) -> str:
+    """Convierte '2026-03' en 'Mar'."""
+    return MESES_CORTOS[int(mes_str.split("-")[1])]
+
+
 def _figura_a_imagen(fig) -> BytesIO:
     """Renderiza una figura de matplotlib a un PNG en memoria y la cierra."""
     buffer = BytesIO()
@@ -252,29 +264,40 @@ def _figura_a_imagen(fig) -> BytesIO:
 def grafico_distribucion_categorias(df: pd.DataFrame) -> BytesIO:
     """Gráfico de pastel con el peso de cada categoría sobre el gasto total."""
     por_categoria = df.groupby("categoria")["monto"].sum().sort_values(ascending=False)
+    total = float(por_categoria.sum())
+    pcts = por_categoria / total * 100
 
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.pie(
+    labels_pie = [cat if pct >= 3 else "" for cat, pct in zip(por_categoria.index, pcts)]
+
+    def autopct_fn(pct):
+        return f"{pct:.1f}%" if pct >= 3 else ""
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    wedges, _, _ = ax.pie(
         por_categoria.to_numpy(),
-        labels=list(por_categoria.index),
-        autopct="%1.1f%%",
+        labels=labels_pie,
+        autopct=autopct_fn,
         startangle=90,
     )
     ax.axis("equal")
     ax.set_title("Distribución de gastos por categoría")
+    ax.legend(wedges, list(por_categoria.index), title="Categoría", loc="center left", bbox_to_anchor=(1, 0.5))
     return _figura_a_imagen(fig)
 
 
 def grafico_comparativo_meses(df: pd.DataFrame) -> BytesIO:
     """Gráfico de barras con el gasto total de cada mes."""
     por_mes = df.groupby("mes")["monto"].sum()
+    x_pos = list(range(len(por_mes)))
+    etiquetas = [_etiqueta_mes(m) for m in por_mes.index]
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.bar(por_mes.index, por_mes.to_numpy(), color="#4C72B0")
+    ax.bar(x_pos, por_mes.to_numpy(), color="#4C72B0")
     ax.set_title("Comparativo de gastos por mes")
     ax.set_xlabel("Mes")
     ax.set_ylabel("Monto total")
-    ax.tick_params(axis="x", rotation=45)
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(etiquetas, rotation=0)
     for i, valor in enumerate(por_mes.to_numpy()):
         ax.text(i, valor, f"{valor:,.0f}", ha="center", va="bottom", fontsize=8)
     return _figura_a_imagen(fig)
@@ -291,17 +314,21 @@ def grafico_apilado_categoria_mes(df: pd.DataFrame) -> BytesIO:
         fill_value=0,
     )
 
+    x_pos = list(range(len(pivot)))
+    etiquetas = [_etiqueta_mes(m) for m in pivot.index]
+
     fig, ax = plt.subplots(figsize=(9, 5))
     acumulado = np.zeros(len(pivot))
     for categoria in pivot.columns:
         valores = pivot[categoria].to_numpy()
-        ax.bar(pivot.index, valores, bottom=acumulado, label=str(categoria))
+        ax.bar(x_pos, valores, bottom=acumulado, label=str(categoria))
         acumulado += valores
 
     ax.set_title("Gastos por categoría y mes")
     ax.set_xlabel("Mes")
     ax.set_ylabel("Monto total")
-    ax.tick_params(axis="x", rotation=45)
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(etiquetas, rotation=0)
     ax.legend(title="Categoría", bbox_to_anchor=(1.02, 1), loc="upper left")
     return _figura_a_imagen(fig)
 
@@ -309,16 +336,24 @@ def grafico_apilado_categoria_mes(df: pd.DataFrame) -> BytesIO:
 def grafico_pastel_mes(df_mes: pd.DataFrame, nombre_mes: str) -> BytesIO:
     """Pastel de categorías para un único mes."""
     por_cat = df_mes.groupby("categoria")["monto"].sum().sort_values(ascending=False)
+    total = float(por_cat.sum())
+    pcts = por_cat / total * 100
 
-    fig, ax = plt.subplots(figsize=(6, 4.5))
-    ax.pie(
+    labels_pie = [cat if pct >= 3 else "" for cat, pct in zip(por_cat.index, pcts)]
+
+    def autopct_fn(pct):
+        return f"{pct:.1f}%" if pct >= 3 else ""
+
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    wedges, _, _ = ax.pie(
         por_cat.to_numpy(),
-        labels=list(por_cat.index),
-        autopct="%1.1f%%",
+        labels=labels_pie,
+        autopct=autopct_fn,
         startangle=90,
     )
     ax.axis("equal")
     ax.set_title(f"Distribución por categoría · {nombre_mes}")
+    ax.legend(wedges, list(por_cat.index), title="Categoría", loc="center left", bbox_to_anchor=(1, 0.5))
     return _figura_a_imagen(fig)
 
 
