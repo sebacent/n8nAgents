@@ -42,6 +42,8 @@ COLUMNAS_CANONICAS = [
     "fuente",
     "id_doc",
     "moneda",
+    "cuota",
+    "cuotas_total",
 ]
 
 
@@ -109,6 +111,18 @@ def _detectar_moneda_tc(df: pd.DataFrame) -> pd.Series:
     return pd.Series([_moneda_fila(i) for i in df.index], index=df.index)
 
 
+def _extraer_cuotas(texto: str) -> tuple[str, int | None, int | None]:
+    """Detecta el sufijo N/M al final de la descripción y lo extrae.
+
+    Devuelve (descripcion_limpia, cuota, cuotas_total).
+    Si no hay sufijo, cuota y cuotas_total son None.
+    """
+    m = re.search(r"\s+(\d+)/(\d+)$", texto.strip())
+    if m:
+        return texto[: m.start()].strip(), int(m.group(1)), int(m.group(2))
+    return texto, None, None
+
+
 def _normalizar_nombre_columna(nombre: str) -> str:
     """Quita acentos, pasa a minúsculas y reemplaza espacios por '_'."""
     sin_acentos = (
@@ -146,6 +160,10 @@ def adaptador_manual(ruta: str) -> pd.DataFrame:
         df["id_doc"] = ""
     if "moneda" not in df.columns:
         df["moneda"] = "UYU"
+    if "cuota" not in df.columns:
+        df["cuota"] = None
+    if "cuotas_total" not in df.columns:
+        df["cuotas_total"] = None
     return df[COLUMNAS_CANONICAS].copy()
 
 
@@ -225,6 +243,8 @@ def adaptador_brou(ruta: str) -> pd.DataFrame:
             "moneda": "UYU",
         }
     )
+    resultado["cuota"] = None
+    resultado["cuotas_total"] = None
     # Descartar filas sin movimiento (débito y crédito ambos cero).
     return resultado[es_debito | es_credito].reset_index(drop=True)
 
@@ -267,10 +287,9 @@ def adaptador_brou_tc(ruta: str) -> pd.DataFrame:
             f"Columnas encontradas: {', '.join(df.columns)}."
         )
 
-    # Cortar en la primera fila con fecha vacía (fin de la tabla).
-    fecha_serie = df["fecha"]
-    if fecha_serie.isna().any():
-        df = df.iloc[: fecha_serie.isna().idxmax()].copy()
+    # El export de TC tiene filas vacías y encabezados de sección sin fecha
+    # intercalados entre los movimientos, por eso se descartan en lugar de cortar.
+    df = df[df["fecha"].notna()].copy().reset_index(drop=True)
 
     # Detectar columna de monto en orden de preferencia:
     #   1. importe_$ (pesos uruguayos)
@@ -278,7 +297,9 @@ def adaptador_brou_tc(ruta: str) -> pd.DataFrame:
     #   3. monto / importe (nombres genéricos)
     #   4. debito/credito (por si algún export futuro los separa)
     tiene_debito_credito = {"debito", "credito"}.issubset(set(df.columns))
-    col_monto_candidatos = ["importe_$", "importe_u$s", "monto", "importe"]
+    tiene_importe_pesos = "importe_$" in df.columns
+    tiene_importe_usd = "importe_u$s" in df.columns
+    col_monto_candidatos = ["monto", "importe"]
     col_monto = next((c for c in col_monto_candidatos if c in df.columns), None)
 
     if tiene_debito_credito:
@@ -293,6 +314,23 @@ def adaptador_brou_tc(ruta: str) -> pd.DataFrame:
         monto = debito.where(es_debito, credito)
         tipo = pd.Series("gasto", index=df.index).where(es_debito, "ingreso")
         mascara_validos = es_debito | es_credito
+    elif tiene_importe_pesos or tiene_importe_usd:
+        # Formato BROU TC: cada fila tiene valor solo en UNA de las dos columnas.
+        # Si ambas existen, se combinan fila a fila; si solo existe una, se usa esa.
+        pesos = (
+            pd.Series([_parsear_monto(v) or 0.0 for v in df["importe_$"]], index=df.index)
+            if tiene_importe_pesos else pd.Series(0.0, index=df.index)
+        )
+        usd = (
+            pd.Series([_parsear_monto(v) or 0.0 for v in df["importe_u$s"]], index=df.index)
+            if tiene_importe_usd else pd.Series(0.0, index=df.index)
+        )
+        # Cuando la fila tiene pesos (≠ 0) se usa pesos; si no, dólares.
+        monto_raw = pesos.where(pesos != 0, usd)
+        moneda = pd.Series("UYU", index=df.index).where(pesos != 0, "USD")
+        tipo = monto_raw.apply(lambda v: "ingreso" if v < 0 else "gasto")
+        monto = monto_raw.abs()
+        mascara_validos = monto > 0
     elif col_monto is not None:
         montos_raw = pd.Series(
             [_parsear_monto(v) for v in df[col_monto]], index=df.index
@@ -323,25 +361,32 @@ def adaptador_brou_tc(ruta: str) -> pd.DataFrame:
         else pd.Series("", index=df.index)
     )
 
-    # Detectar moneda original comparando importe_origen con importe_$ e importe_u$s.
-    # Si importe_origen ≈ importe_u$s → la compra fue en USD.
-    # Si importe_origen ≈ importe_$ → la compra fue en UYU.
-    # En cualquier otro caso se asume UYU.
-    moneda = _detectar_moneda_tc(df)
+    # moneda ya está determinada en el bloque importe_$/importe_u$s.
+    # Para otros formatos (debito/credito o columna genérica) se infiere con _detectar_moneda_tc.
+    if not (tiene_importe_pesos or tiene_importe_usd):
+        moneda = _detectar_moneda_tc(df)
+
+    cuotas = descripcion.apply(lambda d: _extraer_cuotas(str(d)))
+    descripcion_limpia = cuotas.apply(lambda t: t[0])
+    cuota_num = cuotas.apply(lambda t: t[1])
+    cuota_total = cuotas.apply(lambda t: t[2])
 
     resultado = pd.DataFrame(
         {
             "fecha": pd.to_datetime(df["fecha"], errors="coerce"),
-            "descripcion": descripcion,
+            "descripcion": descripcion_limpia,
             "categoria": "",
             "monto": monto,
             "tipo": tipo,
             "fuente": "brou_tc",
             "id_doc": id_doc_col.astype("string").fillna(""),
             "moneda": moneda,
+            "cuota": cuota_num,
+            "cuotas_total": cuota_total,
         }
     )
-    return resultado[mascara_validos].reset_index(drop=True)
+    mascara_pagos = descripcion.str.strip().str.upper() == "PAGOS"
+    return resultado[mascara_validos & ~mascara_pagos].reset_index(drop=True)
 
 
 # Registry de adaptadores. Agregar acá nuevos bancos/tarjetas.
