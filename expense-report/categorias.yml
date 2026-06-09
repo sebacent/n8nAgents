@@ -8,13 +8,12 @@
 # El 'tipo' (gasto/ingreso) NO se define acá: lo determina SIEMPRE la fuente
 # del dato (las columnas Débito/Crédito del banco, o la columna 'tipo' del CSV
 # manual), por encima de cualquier regla. Estas reglas solo asignan categoría.
+Propina:
+  - Propin
+Delivery:
+  - PedidosYa 
 
 Comida:
-  - PedidosYa
-  - Tienda Inglesa
-  - Disco N
-  - Devoto
-  - Autoservice
   - MC Donald
   - KFC
   - Hurban Food
@@ -24,9 +23,36 @@ Comida:
   - Goddard
   - La Cuadra
   - Restaurante
+  - LATU
+  - Pizzeria
+  - Tropical
+  - SW
+  - Lokotas
+  - Burger King
+  
+Supermercado:
   - Supermercado
-  - Natal 33
-  - Kinko
+  - Tienda Inglesa
+  - Disco N
+  - Devoto
+  - Autoservice
+  - Plaza Cuba
+  - Kinko  
+  - Tres Marias
+  - Ta Ta
+  - Geant
+  - Polleria
+  - Carniceria
+  - Carne
+  
+  
+Ropa: 
+  - ZARA
+  - Nike
+  - Adidas
+  - CAT
+  - Levis
+  
 
 Transporte:
   - Nafta
@@ -34,22 +60,23 @@ Transporte:
   - Cabify
   - Subte
   - DISA
-  - Tres Marias
+  - Ancap
+  - Esso
+  
 
 Salud:
   - Farmacia
   - Gimnasio
-
+  - Natal 33
+  
 Ocio:
   - Cine
   - Concierto
-  - Plaza Cuba
   - Bookshop
 
 Educacion:
   - Libros
   - Curso
-  - LATU
 
 Servicios:
   - Pago Servicios
