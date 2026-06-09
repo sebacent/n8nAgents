@@ -38,7 +38,7 @@ COLUMNAS_REQUERIDAS = ["fecha", "descripcion", "categoria", "monto"]
 
 # Columnas opcionales con sus valores por defecto, para compatibilidad hacia
 # atrás con CSVs viejos que no las traen.
-COLUMNAS_OPCIONALES = {"tipo": "gasto", "fuente": "manual", "id_doc": ""}
+COLUMNAS_OPCIONALES = {"tipo": "gasto", "fuente": "manual", "id_doc": "", "moneda": "UYU"}
 
 # Tipos válidos para la columna 'tipo'.
 TIPOS_VALIDOS = {"gasto", "ingreso"}
@@ -187,7 +187,7 @@ def limpiar_datos(df: pd.DataFrame) -> pd.DataFrame:
             f"Se esperaba uno de: {', '.join(sorted(TIPOS_VALIDOS))}."
         )
 
-    columnas = ["fecha", "descripcion", "categoria", "monto", "mes", "tipo", "fuente", "id_doc"]
+    columnas = ["fecha", "descripcion", "categoria", "monto", "mes", "tipo", "fuente", "id_doc", "moneda"]
     return df_valido.sort_values("fecha")[columnas].reset_index(drop=True)
 
 

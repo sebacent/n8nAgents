@@ -4,7 +4,7 @@
 Cada fuente (banco, tarjeta, archivo manual) tiene su propio adaptador. Todos
 devuelven un DataFrame con el formato canónico que consume ``resumen_gastos.py``:
 
-    fecha, descripcion, categoria, monto, tipo, fuente, id_doc
+    fecha, descripcion, categoria, monto, tipo, fuente, id_doc, moneda
 
 Flujo:
   1) El adaptador parsea el archivo crudo y produce filas sin clasificar.
@@ -39,6 +39,7 @@ COLUMNAS_CANONICAS = [
     "tipo",
     "fuente",
     "id_doc",
+    "moneda",
 ]
 
 
@@ -72,6 +73,36 @@ def _parsear_monto(valor) -> float | None:
         return float(texto)
     except ValueError:
         return None
+
+
+def _detectar_moneda_tc(df: pd.DataFrame) -> pd.Series:
+    """Infiere la moneda original de cada fila del estado de TC.
+
+    Lógica: si ``importe_origen`` ≈ ``importe_u$s`` (dentro del 1 %) la compra
+    fue en USD; si ≈ ``importe_$`` fue en UYU. Cuando falta ``importe_origen``
+    se asume UYU (moneda local).
+    """
+    if "importe_origen" not in df.columns:
+        return pd.Series("UYU", index=df.index)
+
+    origen = pd.Series(
+        [_parsear_monto(v) or 0.0 for v in df["importe_origen"]], index=df.index
+    )
+
+    col_usd = "importe_u$s" if "importe_u$s" in df.columns else None
+    usd = (
+        pd.Series([_parsear_monto(v) or 0.0 for v in df[col_usd]], index=df.index)
+        if col_usd else pd.Series(0.0, index=df.index)
+    )
+
+    def _moneda_fila(idx):
+        o = abs(origen[idx])
+        u = abs(usd[idx])
+        if o > 0 and u > 0 and abs(o - u) / u < 0.01:
+            return "USD"
+        return "UYU"
+
+    return pd.Series([_moneda_fila(i) for i in df.index], index=df.index)
 
 
 def _normalizar_nombre_columna(nombre: str) -> str:
@@ -109,6 +140,8 @@ def adaptador_manual(ruta: str) -> pd.DataFrame:
         df["fuente"] = "manual"
     if "id_doc" not in df.columns:
         df["id_doc"] = ""
+    if "moneda" not in df.columns:
+        df["moneda"] = "UYU"
     return df[COLUMNAS_CANONICAS].copy()
 
 
@@ -185,6 +218,7 @@ def adaptador_brou(ruta: str) -> pd.DataFrame:
             "tipo": tipo,
             "fuente": "brou",
             "id_doc": id_doc_col.astype("string").fillna(""),
+            "moneda": "UYU",
         }
     )
     # Descartar filas sin movimiento (débito y crédito ambos cero).
@@ -203,13 +237,11 @@ def _localizar_header_brou(df_crudo: pd.DataFrame) -> int | None:
 def adaptador_brou_tc(ruta: str) -> pd.DataFrame:
     """Parser para estados de cuenta de BROU Mastercard en formato Excel.
 
-    Asunciones del formato (validar contra el archivo real):
-      * La tabla de movimientos tiene una fila cuya primera celda dice 'Fecha'.
-      * Columnas esperadas: Fecha, Descripción, Número de documento (opcional),
-        Monto (importe de la compra, positivo = gasto, negativo = devolución).
-      * Si hay dos columnas de monto (Débito/Crédito), se usa la misma lógica
-        que el adaptador BROU; si hay una sola columna 'Monto', se infiere el
-        tipo por el signo.
+    Formato real del export de BROU online-banking (tarjeta de crédito):
+      Fecha | Descripción | (sin nombre) | Importe origen | Importe $ | Importe U$S
+
+    Se usa 'Importe $' como monto principal; si está vacío se toma 'Importe U$S'.
+    Todas las filas son gastos salvo montos negativos (devoluciones → ingreso).
     """
     if not os.path.isfile(ruta):
         raise ErrorImportacion(f"No se encontró el archivo: '{ruta}'.")
@@ -236,10 +268,14 @@ def adaptador_brou_tc(ruta: str) -> pd.DataFrame:
     if fecha_serie.isna().any():
         df = df.iloc[: fecha_serie.isna().idxmax()].copy()
 
-    # Detectar si el estado tiene columnas Débito/Crédito (igual que el banco)
-    # o una única columna de monto.
+    # Detectar columna de monto en orden de preferencia:
+    #   1. importe_$ (pesos uruguayos)
+    #   2. importe_u$s (dólares)
+    #   3. monto / importe (nombres genéricos)
+    #   4. debito/credito (por si algún export futuro los separa)
     tiene_debito_credito = {"debito", "credito"}.issubset(set(df.columns))
-    tiene_monto = any(c in df.columns for c in ("monto", "importe"))
+    col_monto_candidatos = ["importe_$", "importe_u$s", "monto", "importe"]
+    col_monto = next((c for c in col_monto_candidatos if c in df.columns), None)
 
     if tiene_debito_credito:
         debito = pd.Series(
@@ -253,8 +289,7 @@ def adaptador_brou_tc(ruta: str) -> pd.DataFrame:
         monto = debito.where(es_debito, credito)
         tipo = pd.Series("gasto", index=df.index).where(es_debito, "ingreso")
         mascara_validos = es_debito | es_credito
-    elif tiene_monto:
-        col_monto = "monto" if "monto" in df.columns else "importe"
+    elif col_monto is not None:
         montos_raw = pd.Series(
             [_parsear_monto(v) for v in df[col_monto]], index=df.index
         ).fillna(0.0)
@@ -264,7 +299,7 @@ def adaptador_brou_tc(ruta: str) -> pd.DataFrame:
     else:
         raise ErrorImportacion(
             f"No se encontraron columnas de monto en '{ruta}'. "
-            f"Se esperaba 'Monto', 'Importe' o par 'Débito'/'Crédito'. "
+            f"Se esperaba 'Importe $', 'Importe U$S', 'Monto' o par 'Débito'/'Crédito'. "
             f"Columnas encontradas: {', '.join(df.columns)}."
         )
 
@@ -284,6 +319,12 @@ def adaptador_brou_tc(ruta: str) -> pd.DataFrame:
         else pd.Series("", index=df.index)
     )
 
+    # Detectar moneda original comparando importe_origen con importe_$ e importe_u$s.
+    # Si importe_origen ≈ importe_u$s → la compra fue en USD.
+    # Si importe_origen ≈ importe_$ → la compra fue en UYU.
+    # En cualquier otro caso se asume UYU.
+    moneda = _detectar_moneda_tc(df)
+
     resultado = pd.DataFrame(
         {
             "fecha": pd.to_datetime(df["fecha"], errors="coerce"),
@@ -293,6 +334,7 @@ def adaptador_brou_tc(ruta: str) -> pd.DataFrame:
             "tipo": tipo,
             "fuente": "brou_tc",
             "id_doc": id_doc_col.astype("string").fillna(""),
+            "moneda": moneda,
         }
     )
     return resultado[mascara_validos].reset_index(drop=True)
