@@ -200,9 +200,108 @@ def _localizar_header_brou(df_crudo: pd.DataFrame) -> int | None:
     return None
 
 
+def adaptador_brou_tc(ruta: str) -> pd.DataFrame:
+    """Parser para estados de cuenta de BROU Mastercard en formato Excel.
+
+    Asunciones del formato (validar contra el archivo real):
+      * La tabla de movimientos tiene una fila cuya primera celda dice 'Fecha'.
+      * Columnas esperadas: Fecha, Descripción, Número de documento (opcional),
+        Monto (importe de la compra, positivo = gasto, negativo = devolución).
+      * Si hay dos columnas de monto (Débito/Crédito), se usa la misma lógica
+        que el adaptador BROU; si hay una sola columna 'Monto', se infiere el
+        tipo por el signo.
+    """
+    if not os.path.isfile(ruta):
+        raise ErrorImportacion(f"No se encontró el archivo: '{ruta}'.")
+
+    df_crudo = pd.read_excel(ruta, header=None, dtype=object)
+    fila_header = _localizar_header_brou(df_crudo)
+    if fila_header is None:
+        raise ErrorImportacion(
+            f"No se encontró la tabla de movimientos en '{ruta}'. "
+            "Se esperaba una fila con 'Fecha' en la primera columna."
+        )
+
+    df = pd.read_excel(ruta, header=fila_header, dtype=object)
+    df.columns = [_normalizar_nombre_columna(str(c)) for c in df.columns]
+
+    if "fecha" not in df.columns:
+        raise ErrorImportacion(
+            f"No se encontró la columna 'Fecha' en '{ruta}'. "
+            f"Columnas encontradas: {', '.join(df.columns)}."
+        )
+
+    # Cortar en la primera fila con fecha vacía (fin de la tabla).
+    fecha_serie = df["fecha"]
+    if fecha_serie.isna().any():
+        df = df.iloc[: fecha_serie.isna().idxmax()].copy()
+
+    # Detectar si el estado tiene columnas Débito/Crédito (igual que el banco)
+    # o una única columna de monto.
+    tiene_debito_credito = {"debito", "credito"}.issubset(set(df.columns))
+    tiene_monto = any(c in df.columns for c in ("monto", "importe"))
+
+    if tiene_debito_credito:
+        debito = pd.Series(
+            [_parsear_monto(v) for v in df["debito"]], index=df.index
+        ).fillna(0.0)
+        credito = pd.Series(
+            [_parsear_monto(v) for v in df["credito"]], index=df.index
+        ).fillna(0.0)
+        es_debito = debito > 0
+        es_credito = credito > 0
+        monto = debito.where(es_debito, credito)
+        tipo = pd.Series("gasto", index=df.index).where(es_debito, "ingreso")
+        mascara_validos = es_debito | es_credito
+    elif tiene_monto:
+        col_monto = "monto" if "monto" in df.columns else "importe"
+        montos_raw = pd.Series(
+            [_parsear_monto(v) for v in df[col_monto]], index=df.index
+        ).fillna(0.0)
+        tipo = montos_raw.apply(lambda v: "ingreso" if v < 0 else "gasto")
+        monto = montos_raw.abs()
+        mascara_validos = monto > 0
+    else:
+        raise ErrorImportacion(
+            f"No se encontraron columnas de monto en '{ruta}'. "
+            f"Se esperaba 'Monto', 'Importe' o par 'Débito'/'Crédito'. "
+            f"Columnas encontradas: {', '.join(df.columns)}."
+        )
+
+    descripcion_col = next(
+        (c for c in ("descripcion", "establecimiento", "comercio") if c in df.columns),
+        None,
+    )
+    if descripcion_col is None:
+        raise ErrorImportacion(
+            f"No se encontró columna de descripción en '{ruta}'. "
+            f"Columnas encontradas: {', '.join(df.columns)}."
+        )
+    descripcion = df[descripcion_col].astype("string").str.strip()
+
+    id_doc_col = (
+        df["numero_de_documento"] if "numero_de_documento" in df.columns
+        else pd.Series("", index=df.index)
+    )
+
+    resultado = pd.DataFrame(
+        {
+            "fecha": pd.to_datetime(df["fecha"], errors="coerce"),
+            "descripcion": descripcion,
+            "categoria": "",
+            "monto": monto,
+            "tipo": tipo,
+            "fuente": "brou_tc",
+            "id_doc": id_doc_col.astype("string").fillna(""),
+        }
+    )
+    return resultado[mascara_validos].reset_index(drop=True)
+
+
 # Registry de adaptadores. Agregar acá nuevos bancos/tarjetas.
 ADAPTADORES: dict[str, Callable[[str], pd.DataFrame]] = {
     "brou": adaptador_brou,
+    "brou_tc": adaptador_brou_tc,
     "manual": adaptador_manual,
 }
 
@@ -298,6 +397,22 @@ def _clave_dedup(df: pd.DataFrame) -> pd.Series:
     return partes.apply(_fila, axis=1)
 
 
+def filtrar_pagos_tc(
+    df_existente: pd.DataFrame, meses_tc: set[str]
+) -> tuple[pd.DataFrame, int]:
+    """Quita filas de 'Tarjeta de Crédito' en los meses cubiertos por la TC importada.
+
+    Esto evita el doble conteo: el pago agregado del banco queda reemplazado
+    por el desglose real de la tarjeta.
+    """
+    if df_existente.empty or not meses_tc:
+        return df_existente, 0
+    fechas_mes = pd.to_datetime(df_existente["fecha"], errors="coerce").dt.strftime("%Y-%m")
+    mask = (df_existente["categoria"] == "Tarjeta de Crédito") & fechas_mes.isin(meses_tc)
+    n_eliminadas = int(mask.sum())
+    return df_existente[~mask].reset_index(drop=True), n_eliminadas
+
+
 def deduplicar(
     df_nuevo: pd.DataFrame, df_existente: pd.DataFrame
 ) -> tuple[pd.DataFrame, int]:
@@ -325,7 +440,12 @@ def parsear_argumentos() -> argparse.Namespace:
         "--fuente",
         required=True,
         choices=sorted(ADAPTADORES),
-        help="Identificador del adaptador a usar.",
+        help=(
+            "Identificador del adaptador a usar. "
+            "Con 'brou_tc' y --append, las filas de categoría "
+            "'Tarjeta de Crédito' del mismo mes se eliminan automáticamente "
+            "para evitar doble conteo."
+        ),
     )
     parser.add_argument(
         "--entrada", required=True, help="Ruta del archivo del banco/tarjeta."
@@ -369,8 +489,14 @@ def main() -> None:
             df.loc[df["categoria"].fillna("").eq(""), "categoria"] = "Sin clasificar"
 
         n_omitidos = 0
+        n_tc_eliminadas = 0
         if args.append and os.path.isfile(args.salida):
             df_existente = pd.read_csv(args.salida)
+            if args.fuente == "brou_tc":
+                meses_tc = set(
+                    pd.to_datetime(df["fecha"], errors="coerce").dt.strftime("%Y-%m").dropna()
+                )
+                df_existente, n_tc_eliminadas = filtrar_pagos_tc(df_existente, meses_tc)
             df, n_omitidos = deduplicar(df, df_existente)
             df_final = pd.concat([df_existente, df], ignore_index=True)
         else:
@@ -383,6 +509,8 @@ def main() -> None:
 
     sin_clasificar = int((df["categoria"] == "Sin clasificar").sum())
     print(f"Listo. {len(df)} filas nuevas escritas en '{args.salida}'.")
+    if n_tc_eliminadas:
+        print(f"  {n_tc_eliminadas} filas 'Tarjeta de Crédito' reemplazadas por el desglose de la TC.")
     if n_omitidos:
         print(f"  {n_omitidos} filas omitidas por duplicado.")
     if sin_clasificar:
