@@ -27,6 +27,8 @@ import sys
 import unicodedata
 from typing import Callable
 
+import re
+
 import pandas as pd
 import yaml
 
@@ -64,7 +66,9 @@ def _parsear_monto(valor) -> float | None:
         return None
     if isinstance(valor, (int, float)):
         return float(valor)
-    texto = str(valor).strip().replace(" ", "")
+    texto = str(valor).strip()
+    # Quitar símbolos de moneda y espacios (ej. "$ 1.234,56" → "1.234,56").
+    texto = re.sub(r"[^\d.,()\-]", "", texto)
     if not texto:
         return None
     if "," in texto:
