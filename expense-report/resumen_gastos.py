@@ -36,6 +36,13 @@ from openpyxl.drawing.image import Image as ImagenExcel  # noqa: E402
 # Columnas que el CSV debe contener obligatoriamente (en minúsculas).
 COLUMNAS_REQUERIDAS = ["fecha", "descripcion", "categoria", "monto"]
 
+# Columnas opcionales con sus valores por defecto, para compatibilidad hacia
+# atrás con CSVs viejos que no las traen.
+COLUMNAS_OPCIONALES = {"tipo": "gasto", "fuente": "manual", "id_doc": "", "moneda": "UYU"}
+
+# Tipos válidos para la columna 'tipo'.
+TIPOS_VALIDOS = {"gasto", "ingreso"}
+
 # Nombres de mes en español, usados como nombres de hoja.
 NOMBRES_MESES = {
     1: "Enero",
@@ -50,6 +57,13 @@ NOMBRES_MESES = {
     10: "Octubre",
     11: "Noviembre",
     12: "Diciembre",
+}
+
+# Abreviaturas de mes para ejes de gráficos.
+MESES_CORTOS = {
+    1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr",
+    5: "May", 6: "Jun", 7: "Jul", 8: "Ago",
+    9: "Sep", 10: "Oct", 11: "Nov", 12: "Dic",
 }
 
 
@@ -155,7 +169,25 @@ def limpiar_datos(df: pd.DataFrame) -> pd.DataFrame:
     # Etiqueta de periodo "YYYY-MM" usada para agrupar.
     df_valido["mes"] = df_valido["fecha"].dt.strftime("%Y-%m")
 
-    columnas = ["fecha", "descripcion", "categoria", "monto", "mes"]
+    # Completar columnas opcionales (tipo/fuente/id_doc) con sus defaults para
+    # mantener compatibilidad con CSVs viejos.
+    for col, default in COLUMNAS_OPCIONALES.items():
+        if col not in df_valido.columns:
+            df_valido[col] = default
+        else:
+            df_valido[col] = df_valido[col].fillna(default)
+
+    # Normalizar y validar 'tipo'.
+    df_valido["tipo"] = df_valido["tipo"].astype(str).str.strip().str.lower()
+    invalidos = ~df_valido["tipo"].isin(TIPOS_VALIDOS)
+    if invalidos.any():
+        valores = sorted(df_valido.loc[invalidos, "tipo"].unique())
+        raise ErrorDatosGastos(
+            f"Valores inválidos en columna 'tipo': {', '.join(valores)}. "
+            f"Se esperaba uno de: {', '.join(sorted(TIPOS_VALIDOS))}."
+        )
+
+    columnas = ["fecha", "descripcion", "categoria", "monto", "mes", "tipo", "fuente", "id_doc", "moneda"]
     return df_valido.sort_values("fecha")[columnas].reset_index(drop=True)
 
 
@@ -215,6 +247,11 @@ def resumen_por_categoria(df_mes: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Gráficos (matplotlib -> PNG en memoria)
 # ---------------------------------------------------------------------------
+def _etiqueta_mes(mes_str: str) -> str:
+    """Convierte '2026-03' en 'Mar'."""
+    return MESES_CORTOS[int(mes_str.split("-")[1])]
+
+
 def _figura_a_imagen(fig) -> BytesIO:
     """Renderiza una figura de matplotlib a un PNG en memoria y la cierra."""
     buffer = BytesIO()
@@ -227,29 +264,40 @@ def _figura_a_imagen(fig) -> BytesIO:
 def grafico_distribucion_categorias(df: pd.DataFrame) -> BytesIO:
     """Gráfico de pastel con el peso de cada categoría sobre el gasto total."""
     por_categoria = df.groupby("categoria")["monto"].sum().sort_values(ascending=False)
+    total = float(por_categoria.sum())
+    pcts = por_categoria / total * 100
 
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.pie(
+    labels_pie = [cat if pct >= 3 else "" for cat, pct in zip(por_categoria.index, pcts)]
+
+    def autopct_fn(pct):
+        return f"{pct:.1f}%" if pct >= 3 else ""
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    wedges, _, _ = ax.pie(
         por_categoria.to_numpy(),
-        labels=list(por_categoria.index),
-        autopct="%1.1f%%",
+        labels=labels_pie,
+        autopct=autopct_fn,
         startangle=90,
     )
     ax.axis("equal")
     ax.set_title("Distribución de gastos por categoría")
+    ax.legend(wedges, list(por_categoria.index), title="Categoría", loc="center left", bbox_to_anchor=(1, 0.5))
     return _figura_a_imagen(fig)
 
 
 def grafico_comparativo_meses(df: pd.DataFrame) -> BytesIO:
     """Gráfico de barras con el gasto total de cada mes."""
     por_mes = df.groupby("mes")["monto"].sum()
+    x_pos = list(range(len(por_mes)))
+    etiquetas = [_etiqueta_mes(m) for m in por_mes.index]
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.bar(por_mes.index, por_mes.to_numpy(), color="#4C72B0")
+    ax.bar(x_pos, por_mes.to_numpy(), color="#4C72B0")
     ax.set_title("Comparativo de gastos por mes")
     ax.set_xlabel("Mes")
     ax.set_ylabel("Monto total")
-    ax.tick_params(axis="x", rotation=45)
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(etiquetas, rotation=0)
     for i, valor in enumerate(por_mes.to_numpy()):
         ax.text(i, valor, f"{valor:,.0f}", ha="center", va="bottom", fontsize=8)
     return _figura_a_imagen(fig)
@@ -266,17 +314,21 @@ def grafico_apilado_categoria_mes(df: pd.DataFrame) -> BytesIO:
         fill_value=0,
     )
 
+    x_pos = list(range(len(pivot)))
+    etiquetas = [_etiqueta_mes(m) for m in pivot.index]
+
     fig, ax = plt.subplots(figsize=(9, 5))
     acumulado = np.zeros(len(pivot))
     for categoria in pivot.columns:
         valores = pivot[categoria].to_numpy()
-        ax.bar(pivot.index, valores, bottom=acumulado, label=str(categoria))
+        ax.bar(x_pos, valores, bottom=acumulado, label=str(categoria))
         acumulado += valores
 
     ax.set_title("Gastos por categoría y mes")
     ax.set_xlabel("Mes")
     ax.set_ylabel("Monto total")
-    ax.tick_params(axis="x", rotation=45)
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(etiquetas, rotation=0)
     ax.legend(title="Categoría", bbox_to_anchor=(1.02, 1), loc="upper left")
     return _figura_a_imagen(fig)
 
@@ -284,16 +336,24 @@ def grafico_apilado_categoria_mes(df: pd.DataFrame) -> BytesIO:
 def grafico_pastel_mes(df_mes: pd.DataFrame, nombre_mes: str) -> BytesIO:
     """Pastel de categorías para un único mes."""
     por_cat = df_mes.groupby("categoria")["monto"].sum().sort_values(ascending=False)
+    total = float(por_cat.sum())
+    pcts = por_cat / total * 100
 
-    fig, ax = plt.subplots(figsize=(6, 4.5))
-    ax.pie(
+    labels_pie = [cat if pct >= 3 else "" for cat, pct in zip(por_cat.index, pcts)]
+
+    def autopct_fn(pct):
+        return f"{pct:.1f}%" if pct >= 3 else ""
+
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    wedges, _, _ = ax.pie(
         por_cat.to_numpy(),
-        labels=list(por_cat.index),
-        autopct="%1.1f%%",
+        labels=labels_pie,
+        autopct=autopct_fn,
         startangle=90,
     )
     ax.axis("equal")
     ax.set_title(f"Distribución por categoría · {nombre_mes}")
+    ax.legend(wedges, list(por_cat.index), title="Categoría", loc="center left", bbox_to_anchor=(1, 0.5))
     return _figura_a_imagen(fig)
 
 
@@ -352,10 +412,41 @@ def escribir_hoja_mes(writer, df_mes: pd.DataFrame, nombre_hoja: str) -> None:
     hoja.add_image(ImagenExcel(grafico_top_categorias_mes(df_mes, nombre_hoja)), "F26")
 
 
+def escribir_hoja_ingresos(writer, df_ingresos: pd.DataFrame) -> None:
+    """Hoja con el detalle de ingresos del año + total por mes (sin gráficos)."""
+    detalle = df_ingresos[["fecha", "descripcion", "categoria", "monto", "fuente"]].copy()
+    detalle["fecha"] = detalle["fecha"].dt.date
+    detalle.to_excel(writer, sheet_name="Ingresos", index=False)
+    hoja = writer.sheets["Ingresos"]
+    _autoajustar_columnas(hoja, detalle)
+
+    # Total por mes debajo.
+    por_mes = (
+        df_ingresos.groupby("mes")["monto"]
+        .agg(total="sum", cantidad="count")
+        .reset_index()
+    )
+    inicio = len(detalle) + 3
+    por_mes.to_excel(writer, sheet_name="Ingresos", index=False, startrow=inicio)
+
+
 def escribir_excel_anual(df_año: pd.DataFrame, año: int, ruta_salida: str) -> None:
-    """Genera el Excel de un año: hoja Resumen Anual + una hoja por mes."""
-    pivot = agrupar_por_mes_categoria(df_año)
-    resumen_mes = resumen_mensual(df_año)
+    """Genera el Excel de un año: hoja Resumen Anual + una hoja por mes.
+
+    Los gráficos y las agregaciones usan solo movimientos con ``tipo=gasto``.
+    Si hay ingresos en el año, se agrega una hoja ``Ingresos`` con su detalle.
+    """
+    df_gastos = df_año[df_año["tipo"] == "gasto"].reset_index(drop=True)
+    df_ingresos = df_año[df_año["tipo"] == "ingreso"].reset_index(drop=True)
+
+    if df_gastos.empty:
+        raise ErrorDatosGastos(
+            f"El año {año} no tiene movimientos con tipo='gasto'; no se puede "
+            "generar el resumen anual."
+        )
+
+    pivot = agrupar_por_mes_categoria(df_gastos)
+    resumen_mes = resumen_mensual(df_gastos)
 
     with pd.ExcelWriter(ruta_salida, engine="openpyxl") as writer:
         # Hoja 1: Resumen Anual (pivote + tabla mensual + 3 gráficos).
@@ -369,20 +460,24 @@ def escribir_excel_anual(df_año: pd.DataFrame, año: int, ruta_salida: str) -> 
             index=False,
         )
         hoja_resumen.add_image(
-            ImagenExcel(grafico_distribucion_categorias(df_año)), "J1"
+            ImagenExcel(grafico_distribucion_categorias(df_gastos)), "J1"
         )
         hoja_resumen.add_image(
-            ImagenExcel(grafico_comparativo_meses(df_año)), "J28"
+            ImagenExcel(grafico_comparativo_meses(df_gastos)), "J28"
         )
         hoja_resumen.add_image(
-            ImagenExcel(grafico_apilado_categoria_mes(df_año)), "J55"
+            ImagenExcel(grafico_apilado_categoria_mes(df_gastos)), "J55"
         )
 
-        # Hojas mensuales en orden cronológico, solo meses con movimientos.
-        meses_con_datos = sorted(int(m) for m in df_año["fecha"].dt.month.unique())
+        # Hojas mensuales en orden cronológico, solo meses con gastos.
+        meses_con_datos = sorted(int(m) for m in df_gastos["fecha"].dt.month.unique())
         for num_mes in meses_con_datos:
-            df_mes = df_año[df_año["fecha"].dt.month == num_mes].reset_index(drop=True)
+            df_mes = df_gastos[df_gastos["fecha"].dt.month == num_mes].reset_index(drop=True)
             escribir_hoja_mes(writer, df_mes, NOMBRES_MESES[num_mes])
+
+        # Hoja opcional de ingresos al final, solo si hay datos.
+        if not df_ingresos.empty:
+            escribir_hoja_ingresos(writer, df_ingresos)
 
 
 # ---------------------------------------------------------------------------

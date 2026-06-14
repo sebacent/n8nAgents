@@ -1,0 +1,125 @@
+# Reglas de clasificación para el importador de estados de cuenta.
+#
+# Cada clave es el nombre de la categoría y su valor es una lista de patrones
+# (substrings, case-insensitive) que matchean contra la descripción del
+# movimiento. El primer match gana (las categorías se evalúan en orden).
+# Lo que no matchea ningún patrón queda como 'Sin clasificar'.
+#
+# El 'tipo' (gasto/ingreso) NO se define acá: lo determina SIEMPRE la fuente
+# del dato (las columnas Débito/Crédito del banco, o la columna 'tipo' del CSV
+# manual), por encima de cualquier regla. Estas reglas solo asignan categoría.
+Propina:
+  - Propin
+Delivery:
+  - PedidosYa 
+
+Comida:
+  - MC Donald
+  - KFC
+  - Hurban Food
+  - Quarta Market
+  - Ghanima
+  - Sol y Luna
+  - Goddard
+  - La Cuadra
+  - Restaurante
+  - LATU
+  - Pizzeria
+  - Tropical
+  - SW
+  - Lokotas
+  - Burger King
+  
+Supermercado:
+  - Supermercado
+  - Tienda Inglesa
+  - Disco N
+  - Devoto
+  - Autoservice
+  - Plaza Cuba
+  - Kinko  
+  - Tres Marias
+  - Ta Ta
+  - Geant
+  - Polleria
+  - Carniceria
+  - Carne
+  
+  
+Ropa: 
+  - ZARA
+  - Nike
+  - Adidas
+  - CAT
+  - Levis
+  
+
+Transporte:
+  - Nafta
+  - Uber
+  - Cabify
+  - Citasa
+  - Subte
+  - DISA
+  - Ancap
+  - Esso
+
+Entretenimiento:
+  - Spotify
+  - hbomax
+  - HBO
+  - Amazon Prime
+  - Youtube
+  - Apple.com/bill
+  - Claude.ai
+  
+
+Salud:
+  - Farmacia
+  - Gimnasio
+  - Natal 33
+  
+Ocio:
+  - Cine
+  - Concierto
+  - Bookshop
+
+Educacion:
+  - Libros
+  - Curso
+
+Servicios:
+  - Pago Servicios
+  - Antel
+  - UTE
+  - OSE
+
+Tarjeta de Crédito:
+  - Pago de TC
+
+Comisiones bancarias:
+  - COM PENDIENTE DE COBRO
+  - Comision
+
+# IMPORTANTE: las categorías más específicas van ANTES de las genéricas, así
+# "TRF SPI SUELDOS" matchea Sueldo y no la regla genérica de Transferencias.
+
+# El banco lo cobra como débito (gasto): es la devolución del adelanto pedido.
+Adelanto de sueldo:
+  - COBRO DE ADS
+
+Sueldo:
+  - SUELDOS
+
+Ingresos varios:
+  - TRANSFERENCIA RECIBIDA
+  - DEVOL MASTER
+  - TRASPASO DE DINERO
+
+Transferencias:
+  - TRANSFERENCIA SPI ENVIADA
+  - E-BROU
+  - TRF SPI
+
+Retiros:
+  - Retiro Red
