@@ -132,7 +132,10 @@ def limpiar_datos(df: pd.DataFrame) -> pd.DataFrame:
         df[col] = df[col].astype("string").str.strip()
 
     # Conversión tolerante a errores: lo no convertible queda como nulo.
-    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+    # format="ISO8601" acepta tanto "2026-05-20" como "2026-05-10 00:00:00"
+    # por elemento, así un CSV que mezcla fuentes (fecha vs fecha+hora) no
+    # descarta filas por inferencia de formato.
+    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce", format="ISO8601")
     df["monto"] = pd.to_numeric(df["monto"], errors="coerce")
 
     # Detectar el motivo de invalidez de cada fila.
@@ -511,32 +514,45 @@ def parsear_argumentos() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def generar_reportes(
+    entrada: str, salida_dir: str, año: int | None = None
+) -> list[tuple[str, int]]:
+    """Genera un Excel anual por cada año del CSV y devuelve los archivos.
+
+    Encapsula la orquestación (cargar → validar → limpiar → particionar →
+    escribir). No imprime nada: devuelve ``[(ruta, n_registros), ...]`` y lanza
+    ``ErrorDatosGastos`` ante errores. Reutilizable desde la GUI y la CLI.
+    """
+    df_crudo = cargar_csv(entrada)
+    validar_columnas(df_crudo)
+    df = limpiar_datos(df_crudo)
+
+    por_año = particionar_por_año(df)
+
+    # Filtrar al año pedido si corresponde, validando existencia.
+    if año is not None:
+        if año not in por_año:
+            disponibles = ", ".join(str(a) for a in sorted(por_año))
+            raise ErrorDatosGastos(
+                f"No hay datos para el año {año}. "
+                f"Años disponibles en el CSV: {disponibles}."
+            )
+        por_año = {año: por_año[año]}
+
+    os.makedirs(salida_dir, exist_ok=True)
+    archivos_generados: list[tuple[str, int]] = []
+    for a in sorted(por_año):
+        ruta = os.path.join(salida_dir, f"resumen_gastos_{a}.xlsx")
+        escribir_excel_anual(por_año[a], a, ruta)
+        archivos_generados.append((ruta, len(por_año[a])))
+    return archivos_generados
+
+
 def main() -> None:
     """Orquesta el flujo completo: cargar, validar, procesar y exportar."""
     args = parsear_argumentos()
-    archivos_generados: list[tuple[str, int]] = []
     try:
-        df_crudo = cargar_csv(args.entrada)
-        validar_columnas(df_crudo)
-        df = limpiar_datos(df_crudo)
-
-        por_año = particionar_por_año(df)
-
-        # Filtrar al año pedido si corresponde, validando existencia.
-        if args.año is not None:
-            if args.año not in por_año:
-                disponibles = ", ".join(str(a) for a in sorted(por_año))
-                raise ErrorDatosGastos(
-                    f"No hay datos para el año {args.año}. "
-                    f"Años disponibles en el CSV: {disponibles}."
-                )
-            por_año = {args.año: por_año[args.año]}
-
-        os.makedirs(args.salida_dir, exist_ok=True)
-        for año in sorted(por_año):
-            ruta = os.path.join(args.salida_dir, f"resumen_gastos_{año}.xlsx")
-            escribir_excel_anual(por_año[año], año, ruta)
-            archivos_generados.append((ruta, len(por_año[año])))
+        archivos_generados = generar_reportes(args.entrada, args.salida_dir, args.año)
     except ErrorDatosGastos as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)

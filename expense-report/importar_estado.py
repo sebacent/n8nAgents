@@ -559,54 +559,87 @@ def parsear_argumentos() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def importar_archivo(
+    fuente: str,
+    entrada: str,
+    salida: str,
+    append: bool = True,
+    reglas: str | None = None,
+) -> dict:
+    """Importa un archivo al CSV canónico y devuelve estadísticas.
+
+    Encapsula la orquestación (adaptador → clasificación → append con dedupe y
+    reemplazo del pago de TC → escritura). No imprime nada: devuelve un dict
+    con ``{"filas", "tc_reemplazadas", "omitidos", "sin_clasificar"}`` y lanza
+    ``ErrorImportacion`` ante errores. Reutilizable desde la GUI y la CLI.
+    """
+    if fuente not in ADAPTADORES:
+        raise ErrorImportacion(
+            f"Fuente desconocida: '{fuente}'. Opciones: {', '.join(sorted(ADAPTADORES))}."
+        )
+    adaptador = ADAPTADORES[fuente]
+    df = adaptador(entrada)
+
+    ruta_reglas = reglas or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "categorias.yml"
+    )
+    if os.path.isfile(ruta_reglas):
+        df = clasificar(df, cargar_reglas(ruta_reglas))
+    else:
+        # Sin archivo de reglas: lo no categorizado queda 'Sin clasificar'.
+        df.loc[df["categoria"].fillna("").eq(""), "categoria"] = "Sin clasificar"
+
+    # Normalizar la fecha a "YYYY-MM-DD" para que el CSV acumulador tenga un
+    # formato uniforme aunque se mezclen fuentes (evita NaT por inferencia de
+    # formato al releer y al deduplicar).
+    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce").dt.strftime("%Y-%m-%d")
+
+    n_omitidos = 0
+    n_tc_eliminadas = 0
+    if append and os.path.isfile(salida):
+        df_existente = pd.read_csv(salida)
+        if fuente == "brou_tc":
+            # Reemplazar el pago de TC del mismo mes por el desglose real.
+            meses_tc = set(
+                pd.to_datetime(df["fecha"], errors="coerce").dt.strftime("%Y-%m").dropna()
+            )
+            df_existente, n_tc_eliminadas = filtrar_pagos_tc(df_existente, meses_tc)
+        df, n_omitidos = deduplicar(df, df_existente)
+        df_final = pd.concat([df_existente, df], ignore_index=True)
+    else:
+        df_final = df
+
+    df_final[COLUMNAS_CANONICAS].to_csv(salida, index=False)
+
+    return {
+        "filas": int(len(df)),
+        "tc_reemplazadas": int(n_tc_eliminadas),
+        "omitidos": int(n_omitidos),
+        "sin_clasificar": int((df["categoria"] == "Sin clasificar").sum()),
+    }
+
+
 def main() -> None:
     args = parsear_argumentos()
     try:
-        adaptador = ADAPTADORES[args.fuente]
-        df = adaptador(args.entrada)
-
-        ruta_reglas = args.reglas or os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "categorias.yml"
+        stats = importar_archivo(
+            args.fuente, args.entrada, args.salida, args.append, args.reglas
         )
-        if os.path.isfile(ruta_reglas):
-            reglas = cargar_reglas(ruta_reglas)
-            df = clasificar(df, reglas)
-        else:
-            print(
-                f"Aviso: no se encontró '{ruta_reglas}'; las filas sin categoría "
-                "quedan como 'Sin clasificar'.",
-                file=sys.stderr,
-            )
-            df.loc[df["categoria"].fillna("").eq(""), "categoria"] = "Sin clasificar"
-
-        n_omitidos = 0
-        n_tc_eliminadas = 0
-        if args.append and os.path.isfile(args.salida):
-            df_existente = pd.read_csv(args.salida)
-            if args.fuente == "brou_tc":
-                meses_tc = set(
-                    pd.to_datetime(df["fecha"], errors="coerce").dt.strftime("%Y-%m").dropna()
-                )
-                df_existente, n_tc_eliminadas = filtrar_pagos_tc(df_existente, meses_tc)
-            df, n_omitidos = deduplicar(df, df_existente)
-            df_final = pd.concat([df_existente, df], ignore_index=True)
-        else:
-            df_final = df
-
-        df_final[COLUMNAS_CANONICAS].to_csv(args.salida, index=False)
     except ErrorImportacion as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    sin_clasificar = int((df["categoria"] == "Sin clasificar").sum())
-    print(f"Listo. {len(df)} filas nuevas escritas en '{args.salida}'.")
-    if n_tc_eliminadas:
-        print(f"  {n_tc_eliminadas} filas 'Tarjeta de Crédito' reemplazadas por el desglose de la TC.")
-    if n_omitidos:
-        print(f"  {n_omitidos} filas omitidas por duplicado.")
-    if sin_clasificar:
+    print(f"Listo. {stats['filas']} filas nuevas escritas en '{args.salida}'.")
+    if stats["tc_reemplazadas"]:
         print(
-            f"  {sin_clasificar} filas quedaron 'Sin clasificar' "
+            f"  {stats['tc_reemplazadas']} filas 'Tarjeta de Crédito' "
+            "reemplazadas por el desglose de la TC."
+        )
+    if stats["omitidos"]:
+        print(f"  {stats['omitidos']} filas omitidas por duplicado.")
+    if stats["sin_clasificar"]:
+        print(
+            f"  {stats['sin_clasificar']} filas quedaron 'Sin clasificar' "
             "(agregar patrones a categorias.yml para clasificarlas)."
         )
 
