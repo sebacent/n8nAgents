@@ -1,0 +1,109 @@
+{% extends "admin/base.html" %}
+{% block title %}Clientes — Burger Palace{% endblock %}
+{% block page_title %}Clientes{% endblock %}
+
+{% block content %}
+{% set active_page = 'customers' %}
+
+<div class="card">
+  <div class="card-header bg-white border-bottom d-flex justify-content-between align-items-center">
+    <h6 class="mb-0 fw-semibold">
+      <i class="bi bi-people me-2"></i>Clientes Registrados
+      <span class="badge bg-secondary ms-2">{{ customers|length }}</span>
+    </h6>
+    <div class="d-flex gap-2">
+      <span class="badge bg-warning text-dark px-3 py-2">
+        <i class="bi bi-star-fill me-1"></i>
+        {{ customers|selectattr('is_vip')|list|length }} VIP
+      </span>
+    </div>
+  </div>
+  <div class="card-body p-0">
+    {% if customers %}
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th class="ps-3">ID</th>
+            <th>Teléfono</th>
+            <th>Nombre</th>
+            <th class="text-center">VIP</th>
+            <th class="text-center">Pedidos</th>
+            <th>Estado Bot</th>
+            <th>Registrado</th>
+            <th class="pe-3 text-center">Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in customers %}
+          <tr>
+            <td class="ps-3 text-muted fw-bold">#{{ c.id }}</td>
+            <td>
+              <span class="font-monospace">
+                {% if c.phone|length > 6 %}
+                  {{ c.phone[:-4] }}****
+                {% else %}
+                  {{ c.phone }}
+                {% endif %}
+              </span>
+            </td>
+            <td>{{ c.name or '<span class="text-muted fst-italic">Sin nombre</span>'|safe }}</td>
+            <td class="text-center">
+              {% if c.is_vip %}
+                <span class="badge bg-warning text-dark"><i class="bi bi-star-fill me-1"></i>VIP</span>
+              {% else %}
+                <span class="badge bg-light text-muted">Regular</span>
+              {% endif %}
+            </td>
+            <td class="text-center">
+              <span class="badge {% if c.total_orders >= 5 %}bg-success{% elif c.total_orders >= 2 %}bg-info{% else %}bg-light text-dark{% endif %}">
+                {{ c.total_orders }}
+              </span>
+            </td>
+            <td>
+              <span class="badge rounded-pill
+                {% if c.conv_state == 'idle' %}bg-light text-dark
+                {% elif c.conv_state == 'placed' %}bg-success
+                {% elif c.conv_state in ['payment', 'address', 'confirm'] %}bg-warning text-dark
+                {% elif c.conv_state == 'cart' %}bg-info
+                {% else %}bg-secondary{% endif %}">
+                {{ c.conv_state }}
+              </span>
+            </td>
+            <td class="text-muted small">
+              {{ c.created_at.strftime('%d/%m/%Y') if c.created_at else '—' }}
+            </td>
+            <td class="text-center pe-3">
+              <form method="post" action="/admin/customers/{{ c.id }}/vip" class="d-inline">
+                <button type="submit"
+                        class="btn btn-sm {% if c.is_vip %}btn-warning{% else %}btn-outline-warning{% endif %}"
+                        title="{% if c.is_vip %}Quitar VIP{% else %}Hacer VIP{% endif %}">
+                  <i class="bi bi-star{% if c.is_vip %}-fill{% endif %}"></i>
+                  {% if c.is_vip %}Quitar VIP{% else %}Dar VIP{% endif %}
+                </button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="text-center py-5 text-muted">
+      <i class="bi bi-people fs-1 d-block mb-2 opacity-25"></i>
+      No hay clientes registrados aún
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- VIP info card -->
+<div class="alert alert-info mt-3 d-flex align-items-start gap-2">
+  <i class="bi bi-info-circle-fill mt-1 flex-shrink-0"></i>
+  <div>
+    <strong>Programa VIP automático:</strong> Los clientes se convierten en VIP automáticamente al completar
+    <strong>5 pedidos</strong>. Los clientes VIP reciben precios especiales en productos que tengan precio VIP configurado.
+    También puedes activar/desactivar el estado VIP manualmente con el botón.
+  </div>
+</div>
+{% endblock %}

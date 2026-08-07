@@ -1,0 +1,210 @@
+{% extends "admin/base.html" %}
+{% block title %}Menú — Burger Palace{% endblock %}
+{% block page_title %}Gestión de Menú{% endblock %}
+
+{% block content %}
+{% set active_page = 'menu' %}
+
+<div class="row g-4">
+
+  <!-- ── Categories ─────────────────────────────────────────────────── -->
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-header bg-white border-bottom d-flex justify-content-between align-items-center">
+        <h6 class="mb-0 fw-semibold"><i class="bi bi-grid me-2"></i>Categorías</h6>
+        <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#addCategoryModal">
+          <i class="bi bi-plus-lg"></i> Nueva
+        </button>
+      </div>
+      <div class="card-body p-0">
+        {% if categories %}
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th class="ps-3">Emoji</th>
+              <th>Nombre</th>
+              <th class="text-center">Items</th>
+              <th class="text-center pe-3">Estado</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for cat in categories %}
+            <tr>
+              <td class="ps-3 fs-5">{{ cat.emoji }}</td>
+              <td>
+                <div class="fw-semibold">{{ cat.name }}</div>
+                {% if cat.description %}<small class="text-muted">{{ cat.description }}</small>{% endif %}
+              </td>
+              <td class="text-center">
+                <span class="badge bg-secondary">{{ cat.items|length }}</span>
+              </td>
+              <td class="text-center pe-3">
+                <form method="post" action="/admin/menu/categories/{{ cat.id }}/toggle" class="d-inline">
+                  <button type="submit" class="btn btn-sm {% if cat.is_active %}btn-success{% else %}btn-outline-secondary{% endif %}">
+                    {% if cat.is_active %}<i class="bi bi-eye-fill"></i> Activa{% else %}<i class="bi bi-eye-slash"></i> Oculta{% endif %}
+                  </button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="text-center py-4 text-muted">
+          <i class="bi bi-grid fs-2 opacity-25 d-block mb-2"></i>No hay categorías
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Menu Items ─────────────────────────────────────────────────── -->
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header bg-white border-bottom d-flex justify-content-between align-items-center">
+        <h6 class="mb-0 fw-semibold"><i class="bi bi-card-list me-2"></i>Productos</h6>
+        <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#addItemModal">
+          <i class="bi bi-plus-lg"></i> Nuevo
+        </button>
+      </div>
+      <div class="card-body p-0">
+        {% if items %}
+        <div class="table-responsive">
+          <table class="table table-hover mb-0">
+            <thead>
+              <tr>
+                <th class="ps-3">Producto</th>
+                <th>Categoría</th>
+                <th class="text-end">Precio</th>
+                <th class="text-end">VIP</th>
+                <th class="text-center pe-3">Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in items %}
+              <tr>
+                <td class="ps-3">
+                  <div class="fw-semibold">
+                    {{ item.name }}
+                    {% if item.is_special %}<i class="bi bi-star-fill text-warning ms-1" style="font-size:.7rem" title="Especial"></i>{% endif %}
+                  </div>
+                  {% if item.description %}
+                    <small class="text-muted">{{ item.description[:60] }}{% if item.description|length > 60 %}…{% endif %}</small>
+                  {% endif %}
+                </td>
+                <td><span class="badge bg-light text-dark">{{ item.category.emoji }} {{ item.category.name }}</span></td>
+                <td class="text-end fw-semibold">${{ "%.2f"|format(item.price) }}</td>
+                <td class="text-end text-info">
+                  {% if item.price_vip %}<small>${{ "%.2f"|format(item.price_vip) }}</small>{% else %}<span class="text-muted">—</span>{% endif %}
+                </td>
+                <td class="text-center pe-3">
+                  <form method="post" action="/admin/menu/items/{{ item.id }}/toggle" class="d-inline">
+                    <button type="submit" class="btn btn-sm {% if item.is_available %}btn-success{% else %}btn-outline-secondary{% endif %}">
+                      {% if item.is_available %}<i class="bi bi-check2"></i> Activo{% else %}<i class="bi bi-x-lg"></i> Oculto{% endif %}
+                    </button>
+                  </form>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="text-center py-4 text-muted">
+          <i class="bi bi-card-list fs-2 opacity-25 d-block mb-2"></i>No hay productos
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Add Category Modal ────────────────────────────────────────────── -->
+<div class="modal fade" id="addCategoryModal" tabindex="-1">
+  <div class="modal-dialog">
+    <form method="post" action="/admin/menu/categories" class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-grid me-2"></i>Nueva Categoría</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label">Emoji</label>
+          <input type="text" name="emoji" class="form-control" value="🍔" maxlength="4" required>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Nombre *</label>
+          <input type="text" name="name" class="form-control" placeholder="Ej: Hamburguesas Clásicas" required>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Descripción</label>
+          <textarea name="description" class="form-control" rows="2"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="submit" class="btn btn-primary"><i class="bi bi-plus-lg me-1"></i>Crear</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ── Add Item Modal ────────────────────────────────────────────────── -->
+<div class="modal fade" id="addItemModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <form method="post" action="/admin/menu/items" class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-plus-circle me-2"></i>Nuevo Producto</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-3">
+          <div class="col-md-8">
+            <label class="form-label">Nombre *</label>
+            <input type="text" name="name" class="form-control" placeholder="Ej: Classic Burger" required>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Categoría *</label>
+            <select name="category_id" class="form-select" required>
+              <option value="">— Seleccionar —</option>
+              {% for cat in categories %}
+              <option value="{{ cat.id }}">{{ cat.emoji }} {{ cat.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-12">
+            <label class="form-label">Descripción</label>
+            <textarea name="description" class="form-control" rows="2" placeholder="Ingredientes y descripción"></textarea>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Precio *</label>
+            <div class="input-group">
+              <span class="input-group-text">$</span>
+              <input type="number" name="price" class="form-control" step="0.01" min="0" placeholder="0.00" required>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Precio VIP <small class="text-muted">(opcional)</small></label>
+            <div class="input-group">
+              <span class="input-group-text text-warning"><i class="bi bi-star-fill"></i></span>
+              <input type="number" name="price_vip" class="form-control" step="0.01" min="0" placeholder="0.00">
+            </div>
+          </div>
+          <div class="col-md-4 d-flex align-items-end pb-1">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="is_special" id="isSpecial" value="1">
+              <label class="form-check-label" for="isSpecial">
+                <i class="bi bi-star-fill text-warning me-1"></i>Producto Especial
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="submit" class="btn btn-primary"><i class="bi bi-plus-lg me-1"></i>Crear Producto</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
