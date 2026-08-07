@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ticket {{ ticket.order_number }}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
+  <style>
+    body {
+      background: #f0f2f5;
+      display: flex;
+      justify-content: center;
+      padding: 2rem 1rem;
+    }
+
+    .ticket-wrapper {
+      background: #fff;
+      width: 340px;
+      padding: 1.5rem 1.25rem;
+      font-family: 'Courier New', Courier, monospace;
+      font-size: .85rem;
+      border: 1px solid #dee2e6;
+      border-radius: .5rem;
+    }
+
+    .ticket-header {
+      text-align: center;
+      margin-bottom: .75rem;
+    }
+
+    .ticket-header h4 {
+      font-size: 1.1rem;
+      font-weight: 800;
+      letter-spacing: .05em;
+      margin: 0;
+    }
+
+    .ticket-header .order-num {
+      font-size: 1.4rem;
+      font-weight: 700;
+      margin-top: .25rem;
+    }
+
+    .ticket-divider {
+      border-top: 1px dashed #aaa;
+      margin: .6rem 0;
+    }
+
+    .ticket-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: .15rem;
+    }
+
+    .ticket-row .item-name { flex: 1; padding-right: .5rem; }
+    .ticket-row .item-price { white-space: nowrap; }
+
+    .ticket-total {
+      font-size: 1rem;
+      font-weight: 800;
+    }
+
+    .ticket-footer {
+      text-align: center;
+      margin-top: .75rem;
+      font-size: .75rem;
+      color: #666;
+    }
+
+    .no-print { margin-top: 1.5rem; text-align: center; }
+
+    @media print {
+      body {
+        background: #fff;
+        padding: 0;
+      }
+
+      .ticket-wrapper {
+        border: none;
+        border-radius: 0;
+        width: 100%;
+        max-width: 340px;
+        margin: 0 auto;
+      }
+
+      .no-print { display: none !important; }
+    }
+  </style>
+</head>
+<body>
+
+<div>
+  <div class="ticket-wrapper">
+    <!-- Header -->
+    <div class="ticket-header">
+      <div style="font-size:1.5rem">🍔</div>
+      <h4>BURGER PALACE</h4>
+      <div class="text-muted" style="font-size:.75rem">WhatsApp Bot — Pedido</div>
+      <div class="order-num">{{ ticket.order_number }}</div>
+      <div style="font-size:.75rem; color:#555;">
+        {{ ticket.created_at.strftime('%d/%m/%Y %H:%M') if ticket.created_at else '' }}
+      </div>
+    </div>
+
+    <div class="ticket-divider"></div>
+
+    <!-- Customer -->
+    <div class="ticket-row">
+      <span>Cliente:</span>
+      <span><strong>{{ ticket.customer_name }}</strong></span>
+    </div>
+    {% if ticket.phone %}
+    <div class="ticket-row">
+      <span>Tel:</span>
+      <span>{{ ticket.phone }}</span>
+    </div>
+    {% endif %}
+
+    <div class="ticket-divider"></div>
+
+    <!-- Items -->
+    {% for item in ticket.items %}
+    <div class="ticket-row">
+      <span class="item-name">{{ item.quantity }}x {{ item.name }}</span>
+      <span class="item-price">${{ "%.2f"|format(item.subtotal) }}</span>
+    </div>
+    {% endfor %}
+
+    <div class="ticket-divider"></div>
+
+    <!-- Totals -->
+    {% if ticket.discount and ticket.discount > 0 %}
+    <div class="ticket-row">
+      <span>Subtotal:</span>
+      <span>${{ "%.2f"|format(ticket.subtotal) }}</span>
+    </div>
+    <div class="ticket-row text-danger">
+      <span>Descuento:</span>
+      <span>-${{ "%.2f"|format(ticket.discount) }}</span>
+    </div>
+    {% endif %}
+    <div class="ticket-row ticket-total">
+      <span>TOTAL:</span>
+      <span>${{ "%.2f"|format(ticket.total) }}</span>
+    </div>
+
+    <div class="ticket-divider"></div>
+
+    <!-- Payment & Delivery -->
+    <div class="ticket-row">
+      <span>Pago:</span>
+      <span>{{ ticket.payment_method }}</span>
+    </div>
+    <div>
+      <div>Entrega:</div>
+      <div style="word-break:break-word; color:#333;">{{ ticket.address }}</div>
+    </div>
+
+    {% if ticket.notes %}
+    <div class="ticket-divider"></div>
+    <div>Notas: {{ ticket.notes }}</div>
+    {% endif %}
+
+    <div class="ticket-divider"></div>
+
+    <!-- Footer -->
+    <div class="ticket-footer">
+      ¡Gracias por su pedido!<br>
+      Vuelva pronto 🍔
+    </div>
+  </div>
+
+  <!-- Print / Back buttons (hidden on print) -->
+  <div class="no-print">
+    <button onclick="window.print()" class="btn btn-primary me-2">
+      🖨️ Imprimir
+    </button>
+    <button onclick="window.close()" class="btn btn-outline-secondary">
+      Cerrar
+    </button>
+  </div>
+</div>
+
+<script>
+  // Auto-print when opened in a new tab
+  window.addEventListener('load', () => {
+    if (window.opener) window.print();
+  });
+</script>
+</body>
+</html>

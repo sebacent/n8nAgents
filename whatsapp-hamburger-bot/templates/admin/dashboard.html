@@ -1,0 +1,140 @@
+{% extends "admin/base.html" %}
+{% block title %}Dashboard — Burger Palace{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+
+{% block content %}
+{% set active_page = 'dashboard' %}
+
+<!-- Stat cards -->
+<div class="row g-3 mb-4">
+  <div class="col-sm-6 col-xl-3">
+    <div class="card stat-card orders h-100">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-start">
+          <div>
+            <div class="stat-label">Pedidos hoy</div>
+            <div class="stat-value text-primary mt-1">{{ stats.today_orders }}</div>
+          </div>
+          <div class="text-primary opacity-50 fs-2"><i class="bi bi-receipt"></i></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-6 col-xl-3">
+    <div class="card stat-card revenue h-100">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-start">
+          <div>
+            <div class="stat-label">Ingresos hoy</div>
+            <div class="stat-value text-success mt-1">${{ "%.2f"|format(stats.today_revenue) }}</div>
+          </div>
+          <div class="text-success opacity-50 fs-2"><i class="bi bi-cash-coin"></i></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-6 col-xl-3">
+    <div class="card stat-card pending h-100">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-start">
+          <div>
+            <div class="stat-label">Pendientes</div>
+            <div class="stat-value text-warning mt-1">{{ stats.pending_orders }}</div>
+          </div>
+          <div class="text-warning opacity-50 fs-2"><i class="bi bi-hourglass-split"></i></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-6 col-xl-3">
+    <div class="card stat-card vip h-100">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-start">
+          <div>
+            <div class="stat-label">Clientes VIP</div>
+            <div class="stat-value text-info mt-1">{{ stats.vip_customers }}</div>
+          </div>
+          <div class="text-info opacity-50 fs-2"><i class="bi bi-star-fill"></i></div>
+        </div>
+        <div class="mt-1">
+          <small class="text-muted">de {{ stats.total_customers }} totales</small>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Recent orders -->
+<div class="card">
+  <div class="card-header d-flex justify-content-between align-items-center bg-white border-bottom">
+    <h6 class="mb-0 fw-semibold"><i class="bi bi-clock-history me-2"></i>Pedidos Recientes</h6>
+    <a href="/admin/orders" class="btn btn-sm btn-outline-primary">Ver todos</a>
+  </div>
+  <div class="card-body p-0">
+    {% if recent_orders %}
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th class="ps-3">#</th>
+            <th>Cliente</th>
+            <th>Items</th>
+            <th>Total</th>
+            <th>Pago</th>
+            <th>Estado</th>
+            <th>Hora</th>
+            <th class="pe-3">Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for order in recent_orders %}
+          <tr>
+            <td class="ps-3 fw-bold text-muted">#{{ "%04d"|format(order.id) }}</td>
+            <td>
+              {{ order.customer.name or 'Sin nombre' }}
+              {% if order.customer and order.customer.is_vip %}
+                <span class="badge bg-warning text-dark ms-1" title="VIP"><i class="bi bi-star-fill"></i></span>
+              {% endif %}
+            </td>
+            <td><span class="badge bg-light text-dark">{{ order.items|length }} item{{ 's' if order.items|length != 1 }}</span></td>
+            <td class="fw-semibold">${{ "%.2f"|format(order.total) }}</td>
+            <td>
+              {% if order.payment_method == 'cash' %}<span class="badge bg-light text-dark"><i class="bi bi-cash"></i> Efectivo</span>
+              {% elif order.payment_method == 'card' %}<span class="badge bg-light text-dark"><i class="bi bi-credit-card"></i> Tarjeta</span>
+              {% elif order.payment_method == 'transfer' %}<span class="badge bg-light text-dark"><i class="bi bi-bank"></i> Transfer.</span>
+              {% else %}<span class="text-muted">—</span>{% endif %}
+            </td>
+            <td>
+              <span class="badge badge-{{ order.status }} rounded-pill px-2">
+                {% if order.status == 'pending' %}Pendiente
+                {% elif order.status == 'confirmed' %}Confirmado
+                {% elif order.status == 'preparing' %}Preparando
+                {% elif order.status == 'ready' %}Listo
+                {% elif order.status == 'delivered' %}Entregado
+                {% elif order.status == 'cancelled' %}Cancelado
+                {% else %}{{ order.status }}{% endif %}
+              </span>
+            </td>
+            <td class="text-muted small">
+              {{ order.created_at.strftime('%H:%M') if order.created_at else '—' }}
+            </td>
+            <td class="pe-3">
+              <a href="/admin/orders/{{ order.id }}/ticket" target="_blank"
+                 class="btn btn-sm btn-outline-secondary" title="Ticket">
+                <i class="bi bi-printer"></i>
+              </a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="text-center py-5 text-muted">
+      <i class="bi bi-inbox fs-1 d-block mb-2 opacity-25"></i>
+      No hay pedidos aún hoy
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

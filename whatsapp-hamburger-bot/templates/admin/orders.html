@@ -1,0 +1,194 @@
+{% extends "admin/base.html" %}
+{% block title %}Pedidos — Burger Palace{% endblock %}
+{% block page_title %}Gestión de Pedidos{% endblock %}
+
+{% block content %}
+{% set active_page = 'orders' %}
+
+<!-- Filter tabs -->
+<div class="mb-3 filter-tabs d-flex flex-wrap gap-2 align-items-center">
+  <a href="/admin/orders" class="btn btn-sm {% if not current_status %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+    Todos
+  </a>
+  {% for st in valid_statuses %}
+  <a href="/admin/orders?status={{ st }}"
+     class="btn btn-sm {% if current_status == st %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+    {% if st == 'pending' %}⏳ Pendiente
+    {% elif st == 'confirmed' %}✅ Confirmado
+    {% elif st == 'preparing' %}🍳 Preparando
+    {% elif st == 'ready' %}🔔 Listo
+    {% elif st == 'delivered' %}📦 Entregado
+    {% elif st == 'cancelled' %}❌ Cancelado
+    {% else %}{{ st }}{% endif %}
+  </a>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <div class="card-header bg-white border-bottom d-flex justify-content-between align-items-center">
+    <h6 class="mb-0 fw-semibold">
+      <i class="bi bi-receipt me-2"></i>
+      {% if current_status %}
+        Pedidos: {{ current_status|capitalize }}
+      {% else %}
+        Todos los Pedidos
+      {% endif %}
+      <span class="badge bg-secondary ms-2">{{ orders|length }}</span>
+    </h6>
+  </div>
+
+  <div class="card-body p-0">
+    {% if orders %}
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th class="ps-3">#</th>
+            <th>Cliente</th>
+            <th>Dirección</th>
+            <th>Items</th>
+            <th>Total</th>
+            <th>Pago</th>
+            <th>Estado</th>
+            <th>Hora</th>
+            <th class="pe-3 text-center">Acciones</th>
+          </tr>
+        </thead>
+        <tbody id="orders-table-body">
+          {% for order in orders %}
+          <tr id="order-row-{{ order.id }}">
+            <td class="ps-3 fw-bold text-muted">#{{ "%04d"|format(order.id) }}</td>
+            <td>
+              <div class="fw-semibold">{{ order.customer.name or '—' }}
+                {% if order.customer and order.customer.is_vip %}
+                  <i class="bi bi-star-fill text-warning ms-1" title="VIP" style="font-size:.75rem"></i>
+                {% endif %}
+              </div>
+              <small class="text-muted">{{ order.customer.phone if order.customer else '' }}</small>
+            </td>
+            <td>
+              <small class="text-muted" title="{{ order.delivery_address or '' }}">
+                {% if order.delivery_address %}
+                  {% if order.delivery_address == 'Retiro en local' %}
+                    <i class="bi bi-shop"></i> Retiro
+                  {% else %}
+                    <i class="bi bi-geo-alt"></i> {{ order.delivery_address[:30] }}{% if order.delivery_address|length > 30 %}…{% endif %}
+                  {% endif %}
+                {% else %}—{% endif %}
+              </small>
+            </td>
+            <td>
+              {% for item in order.items %}
+                <small class="d-block">{{ item.quantity }}× {{ item.menu_item.name if item.menu_item else '?' }}</small>
+              {% endfor %}
+            </td>
+            <td class="fw-semibold">${{ "%.2f"|format(order.total) }}</td>
+            <td>
+              {% if order.payment_method == 'cash' %}<span class="badge bg-light text-dark"><i class="bi bi-cash"></i> Efectivo</span>
+              {% elif order.payment_method == 'card' %}<span class="badge bg-light text-dark"><i class="bi bi-credit-card"></i> Tarjeta</span>
+              {% elif order.payment_method == 'transfer' %}<span class="badge bg-light text-dark"><i class="bi bi-bank"></i> Transfer.</span>
+              {% else %}<span class="text-muted">—</span>{% endif %}
+            </td>
+            <td>
+              <span id="status-badge-{{ order.id }}" class="badge badge-{{ order.status }} rounded-pill px-2">
+                {% if order.status == 'pending' %}Pendiente
+                {% elif order.status == 'confirmed' %}Confirmado
+                {% elif order.status == 'preparing' %}Preparando
+                {% elif order.status == 'ready' %}Listo
+                {% elif order.status == 'delivered' %}Entregado
+                {% elif order.status == 'cancelled' %}Cancelado
+                {% else %}{{ order.status }}{% endif %}
+              </span>
+              {% if order.rating %}
+                <div class="mt-1">
+                  {% for i in range(order.rating) %}<i class="bi bi-star-fill text-warning" style="font-size:.6rem"></i>{% endfor %}
+                </div>
+              {% endif %}
+            </td>
+            <td class="text-muted small">
+              {{ order.created_at.strftime('%d/%m %H:%M') if order.created_at else '—' }}
+            </td>
+            <td class="pe-3">
+              <div class="d-flex gap-1 justify-content-center flex-wrap">
+                {% if order.status == 'pending' %}
+                  <button class="btn btn-sm btn-outline-info" onclick="updateStatus({{ order.id }}, 'confirmed')" title="Confirmar">
+                    <i class="bi bi-check-circle"></i>
+                  </button>
+                {% endif %}
+                {% if order.status in ['pending', 'confirmed'] %}
+                  <button class="btn btn-sm btn-outline-primary" onclick="updateStatus({{ order.id }}, 'preparing')" title="Preparando">
+                    <i class="bi bi-fire"></i>
+                  </button>
+                {% endif %}
+                {% if order.status == 'preparing' %}
+                  <button class="btn btn-sm btn-outline-success" onclick="updateStatus({{ order.id }}, 'ready')" title="Listo">
+                    <i class="bi bi-bell"></i>
+                  </button>
+                {% endif %}
+                {% if order.status == 'ready' %}
+                  <button class="btn btn-sm btn-success" onclick="updateStatus({{ order.id }}, 'delivered')" title="Entregado">
+                    <i class="bi bi-bag-check"></i>
+                  </button>
+                {% endif %}
+                {% if order.status not in ['delivered', 'cancelled'] %}
+                  <button class="btn btn-sm btn-outline-danger" onclick="updateStatus({{ order.id }}, 'cancelled')" title="Cancelar">
+                    <i class="bi bi-x-circle"></i>
+                  </button>
+                {% endif %}
+                <a href="/admin/orders/{{ order.id }}/ticket" target="_blank"
+                   class="btn btn-sm btn-outline-secondary" title="Imprimir ticket">
+                  <i class="bi bi-printer"></i>
+                </a>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="text-center py-5 text-muted">
+      <i class="bi bi-inbox fs-1 d-block mb-2 opacity-25"></i>
+      No hay pedidos{{ ' con estado "' + current_status + '"' if current_status else '' }}
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const STATUS_LABELS = {
+  pending:   'Pendiente',
+  confirmed: 'Confirmado',
+  preparing: 'Preparando',
+  ready:     'Listo',
+  delivered: 'Entregado',
+  cancelled: 'Cancelado',
+};
+
+async function updateStatus(orderId, newStatus) {
+  try {
+    const res = await fetch(`/api/orders/${orderId}/status`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({status: newStatus}),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+
+    // Update badge text + class
+    const badge = document.getElementById(`status-badge-${orderId}`);
+    if (badge) {
+      badge.textContent = STATUS_LABELS[data.status] || data.status;
+      badge.className = `badge badge-${data.status} rounded-pill px-2`;
+    }
+
+    // Reload page after short delay so action buttons refresh too
+    setTimeout(() => window.location.reload(), 600);
+  } catch (err) {
+    alert('Error al actualizar: ' + err.message);
+  }
+}
+</script>
+{% endblock %}

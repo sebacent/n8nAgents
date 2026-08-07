@@ -1,0 +1,173 @@
+/* Sidebar */
+.sidebar {
+  width: 250px;
+  min-height: 100vh;
+  background: #1a1a2e;
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-brand {
+  padding: 1.5rem 1.25rem;
+  border-bottom: 1px solid rgba(255,255,255,.1);
+}
+
+.sidebar-brand h5 {
+  color: #e94560;
+  font-weight: 700;
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.sidebar-brand small {
+  color: rgba(255,255,255,.4);
+  font-size: .75rem;
+}
+
+.sidebar .nav-link {
+  color: rgba(255,255,255,.7);
+  padding: .65rem 1.25rem;
+  border-left: 3px solid transparent;
+  transition: all .2s;
+  font-size: .9rem;
+}
+
+.sidebar .nav-link:hover {
+  color: #fff;
+  border-left-color: #e94560;
+  background: rgba(255,255,255,.05);
+}
+
+.sidebar .nav-link.active {
+  color: #fff;
+  border-left-color: #e94560;
+  background: rgba(233,69,96,.15);
+  font-weight: 500;
+}
+
+.sidebar .nav-link i {
+  width: 20px;
+  margin-right: .5rem;
+  font-size: 1rem;
+}
+
+/* Main layout */
+.main-content {
+  margin-left: 250px;
+  min-height: 100vh;
+  background: #f0f2f5;
+}
+
+.topbar {
+  background: #fff;
+  border-bottom: 1px solid #dee2e6;
+  padding: .75rem 1.5rem;
+  position: sticky;
+  top: 0;
+  z-index: 99;
+}
+
+.content-area {
+  padding: 1.5rem;
+}
+
+/* Stat cards */
+.stat-card {
+  border-left: 4px solid;
+  border-radius: .375rem;
+}
+
+.stat-card.orders   { border-left-color: #0d6efd; }
+.stat-card.revenue  { border-left-color: #198754; }
+.stat-card.pending  { border-left-color: #ffc107; }
+.stat-card.vip      { border-left-color: #0dcaf0; }
+
+.stat-card .stat-value {
+  font-size: 1.8rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.stat-card .stat-label {
+  font-size: .8rem;
+  color: #6c757d;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+
+/* Status badges */
+.badge-pending    { background-color: #ffc107; color: #000; }
+.badge-confirmed  { background-color: #0dcaf0; color: #000; }
+.badge-preparing  { background-color: #0d6efd; }
+.badge-ready      { background-color: #198754; }
+.badge-delivered  { background-color: #6c757d; }
+.badge-cancelled  { background-color: #dc3545; }
+
+/* Tables */
+.table-hover tbody tr:hover {
+  background-color: rgba(13,110,253,.04);
+}
+
+.table th {
+  font-size: .78rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: #6c757d;
+  font-weight: 600;
+  border-bottom: 2px solid #dee2e6;
+}
+
+/* Filter tabs */
+.filter-tabs .btn {
+  border-radius: 20px;
+  font-size: .8rem;
+  padding: .3rem .85rem;
+}
+
+/* Forms */
+.form-label {
+  font-size: .85rem;
+  font-weight: 500;
+  color: #495057;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .sidebar {
+    transform: translateX(-100%);
+  }
+  .main-content {
+    margin-left: 0;
+  }
+}
+
+/* ── Print styles ─────────────────────────────────────────── */
+@media print {
+  .sidebar,
+  .topbar,
+  .no-print {
+    display: none !important;
+  }
+  .main-content {
+    margin-left: 0 !important;
+  }
+  body {
+    background: #fff !important;
+  }
+}
+
+/* Ticket print page */
+.ticket-wrapper {
+  max-width: 340px;
+  margin: 0 auto;
+  font-family: 'Courier New', monospace;
+}
+
+.ticket-divider {
+  border-top: 1px dashed #333;
+  margin: .5rem 0;
+}
